@@ -293,11 +293,11 @@ function renderOverview() {
   const evBox = $('#ov-events');
   evBox.innerHTML = table(
     [
-      { label: '时间', width: '92px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
+      { label: '时间', width: '116px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
       { label: '来源', width: '78px', render: (r) => `<span class="mono">${esc(r.source)}</span>` },
       { label: '类型', render: (r) => `<span class="mono">${esc(r.type)}</span>` },
       { label: '摘要', render: (r) => `<div class="trunc">${esc(r.summary || r.target || '-')}</div>` },
-      { label: '级别', width: '62px', render: (r) => prioBadge(r.priority) },
+      { label: '级别', width: '72px', render: (r) => prioBadge(r.priority) },
       { label: '状态', width: '92px', render: (r) => badge(r.status) },
     ],
     (s.recent_events || []).slice(0, 8),
@@ -309,10 +309,10 @@ function renderOverview() {
   const rows = (s.recent_tasks || []).slice(0, 8);
   tkBox.innerHTML = table(
     [
-      { label: '时间', width: '92px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
+      { label: '时间', width: '116px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
       { label: '标题', render: (r) => `<div class="trunc">${esc(r.title || r.task_id)}</div>` },
       { label: '节点·引擎', width: '150px', render: (r) => `<span class="mono">${esc(r.node)} · ${esc(r.engine)}</span>` },
-      { label: '技能', width: '110px', render: (r) => `<span class="mono">${esc(r.skill || '-')}</span>` },
+      { label: '技能', width: '120px', render: (r) => `<span class="mono">${esc(r.skill || '-')}</span>` },
       { label: '状态', width: '92px', render: (r) => badge(r.status) },
     ],
     rows,
@@ -343,12 +343,12 @@ function renderApprovals() {
   const hBox = $('#ap-history');
   hBox.innerHTML = table(
     [
-      { label: '时间', width: '92px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
+      { label: '时间', width: '116px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
       { label: '事项', render: (r) => `<div class="trunc">${esc(r.title)}</div>` },
       { label: '分类', width: '120px', render: (r) => `<span class="mono">${esc(r.category || '-')}</span>` },
       { label: '状态', width: '92px', render: (r) => badge(r.status) },
       { label: '审批人', width: '90px', render: (r) => esc(r.decided_by || '-') },
-      { label: '决定时间', width: '96px', render: (r) => `<span class="muted">${esc(r.decided_at ? clock(r.decided_at) : '-')}</span>` },
+      { label: '决定时间', width: '116px', render: (r) => `<span class="muted">${esc(r.decided_at ? clock(r.decided_at) : '-')}</span>` },
     ],
     history,
     { empty: '还没有历史审批' },
@@ -419,12 +419,12 @@ function renderTasks() {
   const box = $('#tasks-table');
   box.innerHTML = table(
     [
-      { label: '创建', width: '92px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
+      { label: '创建', width: '116px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
       { label: '标题', render: (r) => `<div class="trunc">${esc(r.title || '-')}</div>` },
       { label: '事件类型', width: '140px', render: (r) => `<span class="mono">${esc(r.envelope_type || '-')}</span>` },
       { label: '节点·引擎', width: '146px', render: (r) => `<span class="mono">${esc(r.node)} · ${esc(r.engine)}</span>` },
-      { label: '技能', width: '104px', render: (r) => `<span class="mono">${esc(r.skill || '-')}</span>` },
-      { label: '级别', width: '60px', render: (r) => prioBadge(r.priority) },
+      { label: '技能', width: '120px', render: (r) => `<span class="mono">${esc(r.skill || '-')}</span>` },
+      { label: '级别', width: '72px', render: (r) => prioBadge(r.priority) },
       { label: '尝试', width: '56px', render: (r) => `<span class="muted">${esc(r.attempts || 0)}/${esc(r.max_attempts || 1)}</span>` },
       { label: '状态', width: '92px', render: (r) => badge(r.status) },
     ],
@@ -440,12 +440,12 @@ function renderEvents() {
   const box = $('#events-table');
   box.innerHTML = table(
     [
-      { label: '时间', width: '92px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
+      { label: '时间', width: '116px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
       { label: '来源', width: '76px', render: (r) => `<span class="mono">${esc(r.source)}</span>` },
       { label: '类型', width: '160px', render: (r) => `<span class="mono">${esc(r.type)}</span>` },
       { label: '摘要', render: (r) => `<div class="trunc">${esc(r.summary || '-')}</div>` },
       { label: '规则', width: '120px', render: (r) => `<span class="mono">${esc(r.rule_id || '-')}</span>` },
-      { label: '级别', width: '60px', render: (r) => prioBadge(r.priority) },
+      { label: '级别', width: '72px', render: (r) => prioBadge(r.priority) },
       { label: '状态', width: '92px', render: (r) => badge(r.status) },
     ],
     state.events,
@@ -572,7 +572,7 @@ function renderReports() {
   const box = $('#reports-table');
   box.innerHTML = table(
     [
-      { label: '时间', width: '96px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
+      { label: '时间', width: '116px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
       { label: '标题', render: (r) => `<div class="trunc">${esc(r.title)}</div>` },
       { label: '类别', width: '130px', render: (r) => `<span class="mono">${esc(r.kind || '-')}</span>` },
       { label: '任务', width: '180px', render: (r) => `<span class="mono trunc">${esc(r.task_id || '-')}</span>` },
@@ -609,13 +609,13 @@ function renderNotifications() {
   const box = $('#notify-table');
   box.innerHTML = table(
     [
-      { label: '时间', width: '96px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
+      { label: '时间', width: '116px', render: (r) => `<span class="muted nowrap">${esc(clock(r.created_at))}</span>` },
       { label: '级别', width: '74px', render: (r) => prioBadge(r.level) },
       { label: '标题', render: (r) => `<div class="trunc">${esc(r.title || '-')}</div>` },
       { label: '类别', width: '124px', render: (r) => `<span class="mono trunc">${esc(r.kind || '-')}</span>` },
       { label: '通道', width: '96px', render: (r) => `<span class="mono">${esc(r.channel || '-')}</span>` },
       { label: '状态', width: '96px', render: (r) => badge(r.status) },
-      { label: '送达', width: '96px', render: (r) => `<span class="muted nowrap">${r.sent_at ? esc(clock(r.sent_at)) : '未送达'}</span>` },
+      { label: '送达', width: '116px', render: (r) => `<span class="muted nowrap">${r.sent_at ? esc(clock(r.sent_at)) : '未送达'}</span>` },
     ],
     state.notifications,
     { empty: '还没有任何通知' },
@@ -635,7 +635,7 @@ function renderDecisions() {
       { label: '类型', width: '110px', render: (r) => (r.kind === 'refused' ? '<span class="badge err">不做</span>' : '<span class="badge ok">已决定</span>') },
       { label: '内容', render: (r) => `<div>${esc(r.text)}</div>${r.quote && r.quote !== r.text ? `<div class="muted" style="font-size:12px;margin-top:3px">原话：${esc(r.quote)}</div>` : ''}` },
       { label: '记录人', width: '92px', render: (r) => `<span class="mono">${esc(r.decided_by || '-')}</span>` },
-      { label: '时间', width: '96px', render: (r) => `<span class="muted nowrap">${esc(clock(r.decided_at))}</span>` },
+      { label: '时间', width: '116px', render: (r) => `<span class="muted nowrap">${esc(clock(r.decided_at))}</span>` },
       { label: '状态', width: '80px', render: (r) => badge(r.active ? 'active' : 'retired') },
     ],
     state.decisions,
@@ -668,7 +668,7 @@ function renderRules() {
           return `<span class="mono">${esc(r.route?.node || 'any')} · ${esc(r.route?.engine || '-')}</span>`;
         },
       },
-      { label: '技能', width: '112px', render: (r) => `<span class="mono">${esc(r.skill || '-')}</span>` },
+      { label: '技能', width: '122px', render: (r) => `<span class="mono">${esc(r.skill || '-')}</span>` },
       {
         label: '并发',
         width: '96px',
@@ -905,7 +905,7 @@ async function openTask(taskId) {
           { label: '节点', width: '78px', render: (r) => `<span class="mono">${esc(r.node)}</span>` },
           { label: '状态', width: '86px', render: (r) => badge(r.status) },
           { label: '退出码', width: '70px', render: (r) => `<span class="mono">${esc(r.exit_code ?? '-')}</span>` },
-          { label: '开始', width: '96px', render: (r) => `<span class="muted">${esc(clock(r.started_at))}</span>` },
+          { label: '开始', width: '116px', render: (r) => `<span class="muted">${esc(clock(r.started_at))}</span>` },
         ],
         res.runs,
         {},
