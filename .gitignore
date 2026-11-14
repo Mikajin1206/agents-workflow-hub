@@ -1,0 +1,27 @@
+# 运行产物（台账、日志、报告、备份）不进版本库
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 自测临时目录
+.tmp/
+tmp/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 不要把真实密钥提交上去
+config/*.local.json
+# 真实配置带飞书 appSecret 等密钥，公开仓库只提交 config/hub.config.example.json
+config/hub.config.json
+.env
+.env.*
+
+# 运行产物（日报、事件归档等），属运行期数据不进版本库
+artifacts/
