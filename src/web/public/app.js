@@ -122,14 +122,14 @@ const STATUS_MAP = {
   queued: ['排队', 'idle'],
   leased: ['已派', 'run'],
   running: ['执行中', 'run'],
-  awaiting_approval: ['待批红', 'p1'],
+  awaiting_approval: ['待审批', 'p1'],
   deciding: ['待决策', 'p1'],
-  approved: ['已批', 'ok'],
+  approved: ['已批准', 'ok'],
   completed: ['完成', 'ok'],
   failed: ['失败', 'err'],
-  rejected: ['已驳', 'err'],
+  rejected: ['已驳回', 'err'],
   dead_letter: ['死信', 'err'],
-  pending: ['待批红', 'p1'],
+  pending: ['待审批', 'p1'],
   revising: ['调整中', 'warn'],
   executing: ['执行中', 'run'],
   executed: ['已完结', 'ok'],
@@ -270,8 +270,8 @@ function renderOverview() {
     { k: '排队中', v: c.queued, sub: c.running ? `执行 ${c.running}` : '' },
     { k: '已完成', v: c.completed, sub: '' },
     { k: '失败', v: c.failed, sub: c.unrouted ? `待归类 ${c.unrouted}` : '', alert: false },
-    { k: '待批红', v: c.approvals_pending, sub: `累计 ${c.approvals_total}`, alert: c.approvals_pending > 0 },
-    { k: '决定记忆', v: c.decisions, sub: '条生效' },
+    { k: '待审批', v: c.approvals_pending, sub: `累计 ${c.approvals_total}`, alert: c.approvals_pending > 0 },
+    { k: '决策记忆', v: c.decisions, sub: '条生效' },
     { k: '报告', v: c.reports, sub: '份归档' },
   ];
   $('#ov-cards').innerHTML = cards
@@ -284,7 +284,7 @@ function renderOverview() {
     .join('');
 
   const warns = [];
-  if (c.approvals_pending) warns.push(`<div class="notice warn"><span>✍</span><span>有 <b>${c.approvals_pending}</b> 件事在等你批红，处理前不会有任何默认动作。</span></div>`);
+  if (c.approvals_pending) warns.push(`<div class="notice warn"><span>✍</span><span>有 <b>${c.approvals_pending}</b> 个事项等待你审批，确认之前不会有任何默认动作。</span></div>`);
   if (c.failed) warns.push(`<div class="notice warn"><span>!</span><span>有 <b>${c.failed}</b> 个任务失败或进了死信，到「任务」页看细节并决定是否重试。</span></div>`);
   if (c.unrouted) warns.push(`<div class="notice info"><span>⇥</span><span>有 <b>${c.unrouted}</b> 条事件没有规则覆盖，在待归类队列里，可以考虑补一条规则。</span></div>`);
   if (!s.hub.feishu?.enabled) warns.push(`<div class="notice info"><span>✉</span><span>飞书未配置，P0/P1 通知走本地兜底（只打印到日志）。配好 <code>config/hub.config.json</code> 的 feishu 段即可切到真通道。</span></div>`);
@@ -321,14 +321,14 @@ function renderOverview() {
   bindRows(tkBox, rows, (r) => openTask(r.task_id));
 }
 
-/* ── 批红 ── */
+/* ── 审批 ── */
 
 function renderApprovals() {
   const pending = state.approvals.filter((a) => ['pending', 'revising'].includes(a.status));
   const box = $('#ap-pending');
 
   if (!pending.length) {
-    box.innerHTML = `<div class="panel"><div class="body">${emptyBox('目前没有需要你批红的事。白名单之外的事系统会自己做完，只写台账。', '✓')}</div></div>`;
+    box.innerHTML = `<div class="panel"><div class="body">${emptyBox('暂无待审批事项。清单之外的动作系统会自动完成并留痕。', '✓')}</div></div>`;
   } else {
     box.innerHTML = pending.map(renderApprovalCard).join('');
     $$('[data-decide]', box).forEach((btn) => {
@@ -347,11 +347,11 @@ function renderApprovals() {
       { label: '事项', render: (r) => `<div class="trunc">${esc(r.title)}</div>` },
       { label: '分类', width: '120px', render: (r) => `<span class="mono">${esc(r.category || '-')}</span>` },
       { label: '状态', width: '92px', render: (r) => badge(r.status) },
-      { label: '批的人', width: '90px', render: (r) => esc(r.decided_by || '-') },
+      { label: '审批人', width: '90px', render: (r) => esc(r.decided_by || '-') },
       { label: '决定时间', width: '96px', render: (r) => `<span class="muted">${esc(r.decided_at ? clock(r.decided_at) : '-')}</span>` },
     ],
     history,
-    { empty: '还没有历史票拟' },
+    { empty: '还没有历史审批' },
   );
 }
 
@@ -368,20 +368,20 @@ function renderApprovalCard(a) {
     <div class="q">${esc(a.question || '')}</div>
     ${a.proposal ? `<div class="p">${esc(a.proposal)}</div>` : ''}
     <div class="acts">
-      <button class="btn primary sm" data-decide="agree" data-id="${esc(a.approval_id)}">批</button>
-      <button class="btn danger sm" data-decide="reject" data-id="${esc(a.approval_id)}">驳</button>
+      <button class="btn primary sm" data-decide="agree" data-id="${esc(a.approval_id)}">批准</button>
+      <button class="btn danger sm" data-decide="reject" data-id="${esc(a.approval_id)}">驳回</button>
       <button class="btn sm" data-revise="1" data-id="${esc(a.approval_id)}">改派 / 改方案</button>
       <span class="muted" style="font-size:12px">${esc(due)}</span>
     </div>
-    <div class="foot">票拟 ${esc(a.approval_id)}${a.task_id ? ` · 任务 ${esc(a.task_id)}` : ''}${a.event_id ? ` · 事件 ${esc(a.event_id)}` : ''}</div>
+    <div class="foot">审批单 ${esc(a.approval_id)}${a.task_id ? ` · 任务 ${esc(a.task_id)}` : ''}${a.event_id ? ` · 事件 ${esc(a.event_id)}` : ''}</div>
   </div>`;
 }
 
 async function decideApproval(id, decision) {
-  const labels = { agree: '批红', reject: '驳回', revise: '改派' };
+  const labels = { agree: '批准', reject: '驳回', revise: '改派' };
   let note = '';
   if (decision !== 'agree') {
-    note = prompt(`${labels[decision]}：给一句理由（会写进决定记忆）`, '') ?? '';
+    note = prompt(`${labels[decision]}：给一句理由（会写入决策记忆）`, '') ?? '';
     if (note === null) return;
   }
   try {
@@ -404,7 +404,7 @@ async function reviseApproval(id) {
       method: 'POST',
       body: { proposal, by: 'panel' },
     });
-    toast('已重新票拟，回到待批红');
+    toast('已重新提交，回到待审批');
     await loadAll();
   } catch (err) {
     toast(err.message, true);
@@ -518,14 +518,21 @@ function renderPipeline() {
       // history() 是 started_at DESC，组内顺序是倒的；按 step_index 正排回来，
       // 否则「最新一步」会取成 review，顶部徽章永远显示第一步的状态。
       const steps = [...stepsRaw].sort((a, b) => (a.step_index ?? 0) - (b.step_index ?? 0));
-      const byStep = Object.fromEntries(steps.map((s) => [s.step, s]));
-      const anyFail = steps.some((s) => s.status === 'failed');
-      const anyRun = steps.some((s) => s.status === 'running');
-      const allSkipped = steps.length > 0 && steps.every((s) => s.status === 'skipped');
-      const anySkip = steps.some((s) => s.status === 'skipped');
+      // 同一步可能有多轮尝试（如审查 3 轮上限）；只看最新一次（attempt/seq 最大），
+      // 否则「第 1 轮拦下、第 2 轮通过」的流水线会被永远标成失败。
+      const byStep = {};
+      for (const s of steps) {
+        const prev = byStep[s.step];
+        if (!prev || Number(s.attempt ?? 0) >= Number(prev.attempt ?? 0)) byStep[s.step] = s;
+      }
+      const latest = order.map((k) => byStep[k]).filter(Boolean);
+      const anyFail = latest.some((s) => s.status === 'failed');
+      const anyRun = latest.some((s) => s.status === 'running');
+      const allSkipped = latest.length > 0 && latest.every((s) => s.status === 'skipped');
+      const anySkip = latest.some((s) => s.status === 'skipped');
       // 整条流水线的结论：有失败→失败；还在跑→执行中；全跳过→跳过；否则取最后一步
-      const overall = anyFail ? 'failed' : anyRun ? 'running' : allSkipped ? 'skipped' : (steps[steps.length - 1]?.status || 'idle');
-      const skipCount = steps.filter((s) => s.status === 'skipped').length;
+      const overall = anyFail ? 'failed' : anyRun ? 'running' : allSkipped ? 'skipped' : (latest[latest.length - 1]?.status || 'idle');
+      const skipCount = latest.filter((s) => s.status === 'skipped').length;
       const items = order
         .map((k) => {
           const s = byStep[k];
@@ -545,7 +552,7 @@ function renderPipeline() {
             : anyRun
               ? badge('running')
               : anySkip
-                ? `<span class="badge warn">${skipCount === steps.length ? '全部未执行' : `${skipCount} 步未执行`}</span>`
+                ? `<span class="badge warn">${skipCount === latest.length ? '全部未执行' : `${skipCount} 步未执行`}</span>`
                 : badge(overall)}
         </header>
         <div class="body">
@@ -595,7 +602,7 @@ function renderNotifications() {
   const banner = $('#notify-banner');
   const q = state.digestQueued || 0;
   if (q > 0) {
-    banner.innerHTML = `<div class="banner warn">还有 <b>${q}</b> 条 P2 通知攒在聚合队列里，等下一次战报一起送出。战报每天 07:30 跑；不想等可以手动派一条 <code>cron.daily-report</code>。</div>`;
+    banner.innerHTML = `<div class="banner warn">还有 <b>${q}</b> 条 P2 通知攒在聚合队列里，等下一次日报一起送出（每天 07:30）。不想等可以手动派发一条 <code>cron.daily-report</code>。</div>`;
   } else {
     banner.innerHTML = '<div class="banner ok">聚合队列已清空，没有滞留在半路的通知。</div>';
   }
@@ -618,21 +625,21 @@ function renderNotifications() {
   });
 }
 
-/* ── 决定记忆 ── */
+/* ── 决策记忆 ── */
 
 function renderDecisions() {
   const box = $('#decisions-table');
   $('#dc-count').textContent = `${state.decisions.length} 条`;
   box.innerHTML = table(
     [
-      { label: '类型', width: '110px', render: (r) => (r.kind === 'refused' ? '<span class="badge err">不做的事</span>' : '<span class="badge ok">定过的事</span>') },
+      { label: '类型', width: '110px', render: (r) => (r.kind === 'refused' ? '<span class="badge err">不做</span>' : '<span class="badge ok">已决定</span>') },
       { label: '内容', render: (r) => `<div>${esc(r.text)}</div>${r.quote && r.quote !== r.text ? `<div class="muted" style="font-size:12px;margin-top:3px">原话：${esc(r.quote)}</div>` : ''}` },
       { label: '记录人', width: '92px', render: (r) => `<span class="mono">${esc(r.decided_by || '-')}</span>` },
       { label: '时间', width: '96px', render: (r) => `<span class="muted nowrap">${esc(clock(r.decided_at))}</span>` },
       { label: '状态', width: '80px', render: (r) => badge(r.active ? 'active' : 'retired') },
     ],
     state.decisions,
-    { empty: '还没有记录任何决定。系统会把它装进每一次派活的提示词里。' },
+    { empty: '还没有记录。这里的每一条都会注入之后派发的任务。' },
   );
 }
 
@@ -657,7 +664,7 @@ function renderRules() {
         label: '派给',
         width: '160px',
         render: (r) => {
-          if (r.action === 'notify') return '<span class="badge p1">直接推人</span>';
+          if (r.action === 'notify') return '<span class="badge p1">直接通知</span>';
           return `<span class="mono">${esc(r.route?.node || 'any')} · ${esc(r.route?.engine || '-')}</span>`;
         },
       },
@@ -668,9 +675,9 @@ function renderRules() {
         render: (r) => `<span class="muted">${esc(r.limits?.per_key ?? 1)} / ${esc(r.limits?.max_parallel ?? 3)}</span>`,
       },
       {
-        label: '批红',
+        label: '审批',
         width: '78px',
-        render: (r) => (r.approval === 'always' || r.action === 'notify' ? '<span class="badge warn">必批</span>' : '<span class="muted">-</span>'),
+        render: (r) => (r.approval === 'always' || r.action === 'notify' ? '<span class="badge warn">需审批</span>' : '<span class="muted">-</span>'),
       },
       {
         label: '定时',
@@ -781,7 +788,7 @@ function renderEngines() {
   }
 }
 
-/* ── 派活 ── */
+/* ── 派发 ── */
 
 function renderDispatchOptions() {
   const e = $('#dp-engine');
@@ -838,7 +845,7 @@ async function openEvent(eventId) {
         tasks,
         {},
       )}</div></div>` : ''}
-      ${approvals.length ? `<div class="panel"><header>票拟</header><div class="body flush">${table(
+      ${approvals.length ? `<div class="panel"><header>审批</header><div class="body flush">${table(
         [
           { label: '事项', render: (a) => esc(a.title) },
           { label: '状态', width: '90px', render: (a) => badge(a.status) },
@@ -856,7 +863,7 @@ async function openEvent(eventId) {
         runs,
         {},
       )}</div></div>` : ''}
-      ${audit.length ? `<div class="panel"><header>台账留痕</header><div class="body"><ul class="timeline">${audit
+      ${audit.length ? `<div class="panel"><header>操作留痕</header><div class="body"><ul class="timeline">${audit
         .map((a) => `<li class="done"><div class="tt">${esc(a.from_status || '·')} → ${esc(a.to_status || '·')} <span class="muted">${esc(a.actor || '')}</span></div><div class="ts">${esc(a.created_at)}</div></li>`)
         .join('')}</ul></div></div>` : ''}
     `;
@@ -981,7 +988,7 @@ function bind() {
       });
       $('#dc-text').value = '';
       $('#dc-quote').value = '';
-      toast('已记下');
+      toast('已保存');
       await loadAll();
     } catch (err) {
       toast(err.message, true);
@@ -994,7 +1001,7 @@ function bind() {
       node: $('#dp-node').value,
       priority: $('#dp-priority').value,
       skill: $('#dp-skill').value || null,
-      summary: $('#dp-summary').value.trim() || '手动派活',
+      summary: $('#dp-summary').value.trim() || '手动派发',
       prompt: $('#dp-prompt').value.trim(),
       workdir: $('#dp-workdir').value.trim() || null,
       type: 'cmd.manual',
@@ -1002,7 +1009,7 @@ function bind() {
     if (!body.prompt) return toast('指令不能为空', true);
     try {
       const res = await api('/api/dispatch', { method: 'POST', body });
-      toast(`已派活 ${res.task_id || ''}`);
+      toast(`已派发 ${res.task_id || ''}`);
       $('#dp-summary').value = '';
       $('#dp-prompt').value = '';
       await loadAll();

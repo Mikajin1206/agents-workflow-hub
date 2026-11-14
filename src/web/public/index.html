@@ -3,43 +3,94 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>本地自动化 Agent 体系 · 控制台</title>
+<meta name="theme-color" content="#f2efe7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#262624" media="(prefers-color-scheme: dark)">
+<title>Regent · Mika's Personal Agent Task Platform</title>
+<script>
+/* 主题启动：读本地偏好，先于样式挂 data-theme，避免闪烁 */
+(function () {
+  var t = null;
+  try { t = localStorage.getItem('hub_theme'); } catch (e) { /* ignore */ }
+  if (t !== 'dark' && t !== 'light') {
+    t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  document.documentElement.setAttribute('data-theme', t);
+})();
+</script>
 <link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2316233F'/><circle cx='16' cy='16' r='6' fill='%2314B8A6'/></svg>">
+<link rel="icon" href="/static/logo-app.svg" type="image/svg+xml">
 </head>
 <body>
 
 <div class="topbar">
   <div class="brand">
-    <span class="dot"></span>
-    本地自动化 Agent 体系
+    <svg class="brand-mark" width="22" height="22" viewBox="0 0 100 100" aria-hidden="true"><g transform="translate(0 6)" fill="none" stroke="#D97757" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"><path d="M50 76 Q50 42 50 14"/><path d="M50 76 Q42 45 32 27"/><path d="M50 76 Q33 51 13 37"/><path d="M50 76 Q58 45 68 27"/><path d="M50 76 Q67 51 87 37"/></g></svg>
+    <span class="brand-name">Regent</span>
+    <span class="brand-sub">Mika's Personal Agent Task Platform</span>
     <small id="hubname">hub</small>
   </div>
   <div class="spacer"></div>
   <div class="meta">
-    <span>运行 <b id="uptime">-</b></span>
-    <span>规则 <b id="m-rules">-</b></span>
-    <span>技能 <b id="m-skills">-</b></span>
-    <span>飞书 <b id="m-feishu">-</b></span>
+    <span>运行<b id="uptime">-</b></span>
+    <span>规则<b id="m-rules">-</b></span>
+    <span>技能<b id="m-skills">-</b></span>
+    <span>飞书<b id="m-feishu">-</b></span>
   </div>
+  <button class="theme-toggle" id="theme-toggle" title="切换日间 / 夜间" aria-label="切换日间 / 夜间主题">
+    <svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13.5A8.5 8.5 0 1110.5 4 6.5 6.5 0 0020 13.5z"/></svg>
+    <svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg>
+  </button>
   <button class="btn ghost sm" id="btn-refresh" title="重新拉取所有数据">刷新</button>
 </div>
 
 <div class="layout">
   <nav class="nav" id="nav">
-    <button data-view="overview" class="active"><span class="ico">◎</span><span class="lbl">总览</span></button>
-    <button data-view="approvals"><span class="ico">✍</span><span class="lbl">批红</span><span class="n" id="n-approvals">0</span></button>
-    <button data-view="tasks"><span class="ico">⚙</span><span class="lbl">任务</span></button>
-    <button data-view="events"><span class="ico">⇥</span><span class="lbl">事件</span></button>
+    <button data-view="overview" class="active">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/></svg>
+      <span class="lbl">总览</span>
+    </button>
+    <button data-view="approvals">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.2 4.4a2 2 0 012.8 0l.6.6a2 2 0 010 2.8L8.8 17.6 4 19l1.4-4.8L16.2 4.4z"/><path d="M14.5 6.1l3.4 3.4"/></svg>
+      <span class="lbl">审批</span><span class="n" id="n-approvals">0</span>
+    </button>
+    <button data-view="tasks">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.2l1.6 1.6 2.8-2.8M4.5 12.2l1.6 1.6 2.8-2.8M4.5 18.2l1.6 1.6 2.8-2.8"/><path d="M12.5 6.5h7M12.5 12.5h7M12.5 18.5h7"/></svg>
+      <span class="lbl">任务</span>
+    </button>
+    <button data-view="events">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13.5V17a2 2 0 002 2h12a2 2 0 002-2v-3.5"/><path d="M12 4v9.5M8.5 10L12 13.5 15.5 10"/></svg>
+      <span class="lbl">事件</span>
+    </button>
     <div class="grouplabel">资产</div>
-    <button data-view="pipeline"><span class="ico">⛓</span><span class="lbl">流水线</span></button>
-    <button data-view="reports"><span class="ico">▤</span><span class="lbl">报告</span></button>
-    <button data-view="notify"><span class="ico">◔</span><span class="lbl">通知</span></button>
-    <button data-view="decisions"><span class="ico">⌘</span><span class="lbl">决定记忆</span></button>
+    <button data-view="pipeline">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7.4 12h2.2M14.4 12h2.2"/></svg>
+      <span class="lbl">流水线</span>
+    </button>
+    <button data-view="reports">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 3.5h7.6l4.4 4.4v12.6H6.5V3.5z"/><path d="M13.8 3.8v4.4h4.5M9.5 12.5h5M9.5 15.5h5"/></svg>
+      <span class="lbl">报告</span>
+    </button>
+    <button data-view="notify">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16.5v-5a6 6 0 0112 0v5l1.8 2.5H4.2L6 16.5z"/><path d="M10 21a2.2 2.2 0 004 0"/></svg>
+      <span class="lbl">通知</span>
+    </button>
+    <button data-view="decisions">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l8 4-8 4-8-4 8-4z"/><path d="M4 12l8 4 8-4M4 16.5l8 4 8-4"/></svg>
+      <span class="lbl">决策记忆</span>
+    </button>
     <div class="grouplabel">配置</div>
-    <button data-view="rules"><span class="ico">≡</span><span class="lbl">规则</span></button>
-    <button data-view="engines"><span class="ico">▷</span><span class="lbl">引擎/技能</span></button>
-    <button data-view="dispatch"><span class="ico">＋</span><span class="lbl">派活</span></button>
+    <button data-view="rules">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7.5h9.5M19 7.5h1M4 16.5h2.5M11 16.5h9"/><circle cx="16.5" cy="7.5" r="2.2"/><circle cx="8.5" cy="16.5" r="2.2"/></svg>
+      <span class="lbl">规则</span>
+    </button>
+    <button data-view="engines">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.6"/><rect x="10.3" y="10.3" width="3.4" height="3.4"/><path d="M9.5 7V4.5M14.5 7V4.5M9.5 19.5V17M14.5 19.5V17M7 9.5H4.5M7 14.5H4.5M19.5 9.5H17M19.5 14.5H17"/></svg>
+      <span class="lbl">引擎/技能</span>
+    </button>
+    <button data-view="dispatch">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 3.5L3.5 10.4l6.2 2.8 2.9 6.3 7.9-16z"/><path d="M9.7 13.2l4.4-4.4"/></svg>
+      <span class="lbl">派发</span>
+    </button>
   </nav>
 
   <main class="main" id="main">
@@ -47,7 +98,7 @@
     <!-- ── 总览 ── -->
     <section class="view active" id="view-overview">
       <h2>总览</h2>
-      <p class="sub">事件进、中台派、本地干、流水线上线、飞书批红、台账留痕。</p>
+      <p class="sub">事件进入 → 中台调度 → 本地执行 → 流水线上线 → 飞书通知 → 全程留痕。</p>
       <div class="cards" id="ov-cards"></div>
       <div id="ov-warn"></div>
       <div class="panel">
@@ -60,17 +111,17 @@
       </div>
     </section>
 
-    <!-- ── 批红 ── -->
+    <!-- ── 审批 ── -->
     <section class="view" id="view-approvals">
-      <h2>待批红</h2>
-      <p class="sub">只有必问清单内的七类事项会推到这里：删数据、停服、花钱、对外发消息、改产品方向、新建或轮换密钥、修改权限。</p>
+      <h2>审批</h2>
+      <p class="sub">高风险动作会推到这里等你确认：删除数据、停止服务、产生花费、对外发送消息、调整产品方向、新建或轮换密钥、变更权限。</p>
       <div class="notice info">
         <span>⚑</span>
-        <span>超时不会默认同意。24 小时未批只升级提醒一次，事情继续挂着。驳回或改派会写进决定记忆，下次同类任务自动带上。</span>
+        <span>超时不会自动通过。24 小时未处理只升级提醒一次，事项继续挂起。驳回或改派会写入决策记忆，下次同类任务自动带上。</span>
       </div>
       <div id="ap-pending"></div>
       <div class="panel">
-        <header>历史票拟 <span class="spacer"></span><span class="hint">最近 40 条</span></header>
+        <header>历史审批 <span class="spacer"></span><span class="hint">最近 40 条</span></header>
         <div class="body flush" id="ap-history"></div>
       </div>
     </section>
@@ -78,12 +129,12 @@
     <!-- ── 任务 ── -->
     <section class="view" id="view-tasks">
       <h2>任务</h2>
-      <p class="sub">M2 派活 → M3 本地执行 → 结果回写。</p>
+      <p class="sub">M2 派发 → M3 本地执行 → 结果回写。</p>
       <div class="panel">
         <header>
           任务列表
           <span class="spacer"></span>
-          <select id="task-filter" class="btn sm" style="padding:4px 8px">
+          <select id="task-filter" class="btn sm">
             <option value="">全部状态</option>
             <option value="queued">排队</option>
             <option value="leased">已派</option>
@@ -91,7 +142,7 @@
             <option value="completed">完成</option>
             <option value="failed">失败</option>
             <option value="dead_letter">死信</option>
-            <option value="awaiting_approval">待批红</option>
+            <option value="awaiting_approval">待审批</option>
           </select>
         </header>
         <div class="body flush" id="tasks-table"></div>
@@ -114,10 +165,10 @@
       <p class="sub">① 审查（换引擎、只读，最多 3 轮）② 检查（类型/测试/构建）③ 合并（GitHub 门禁）④ 发布 ⑤ 核实。</p>
       <div id="pl-list"></div>
 
-      <div class="panel" style="margin-top:16px">
+      <div class="panel push">
         <header>手动触发一次流水线</header>
         <div class="body">
-          <p class="muted" style="font-size:12px;margin-top:0">
+          <p class="note">
             自动启动关闭时（默认），这是唯一入口。填 PR 所在仓库和编号，五步会按 config 里的模式执行。
           </p>
           <div class="form-grid">
@@ -147,7 +198,7 @@
     <!-- ── 通知流水 ── -->
     <section class="view" id="view-notify">
       <h2>通知流水</h2>
-      <p class="sub">该发的到底发出去没有。P0/P1 即时，P2 攒着随战报一起发，P3 只归档。</p>
+      <p class="sub">P0/P1 即时发送，P2 汇总进每日报告，P3 仅归档。</p>
       <div id="notify-banner"></div>
       <div class="panel">
         <header>最近通知 <span class="spacer"></span><span class="hint">最近 60 条</span></header>
@@ -155,22 +206,22 @@
       </div>
     </section>
 
-    <!-- ── 决定记忆 ── -->
+    <!-- ── 决策记忆 ── -->
     <section class="view" id="view-decisions">
-      <h2>决定记忆</h2>
-      <p class="sub">定过的事、定了不做的事。会被装进每次派活的提示词里。</p>
+      <h2>决策记忆</h2>
+      <p class="sub">已经决定的事、明确不做的事，会注入每一次任务派发的提示词。</p>
       <div class="panel">
-        <header>新增一条 <span class="spacer"></span><span class="hint">亲口说的话越原样越好</span></header>
+        <header>新增一条 <span class="spacer"></span><span class="hint">原话越完整越好</span></header>
         <div class="body">
           <div class="row3">
             <div class="field">
               <label>类型</label>
               <select id="dc-kind">
-                <option value="decided">定过的事</option>
-                <option value="refused">定了不做的事</option>
+                <option value="decided">已决定</option>
+                <option value="refused">明确不做</option>
               </select>
             </div>
-            <div class="field" style="grid-column: span 2">
+            <div class="field span2">
               <label>内容</label>
               <input id="dc-text" placeholder="例如：日报必须 07:30 发，晚于 08:00 就算事故">
             </div>
@@ -179,7 +230,7 @@
             <label>原话（可选）</label>
             <input id="dc-quote" placeholder="留空则用上面的内容">
           </div>
-          <button class="btn primary" id="dc-save">记下来</button>
+          <button class="btn primary" id="dc-save">保存</button>
         </div>
       </div>
       <div class="panel">
@@ -191,7 +242,7 @@
     <!-- ── 规则 ── -->
     <section class="view" id="view-rules">
       <h2>路由规则</h2>
-      <p class="sub">哪类事件 → 派给哪台机器的哪个引擎 → 带哪个 Skill → 并发上限 → 是否必问。</p>
+      <p class="sub">哪类事件派给哪个节点和引擎、带哪个技能、并发上限、是否需要审批。</p>
       <div class="panel">
         <header>config/rules.json <span class="spacer"></span><span class="hint">改文件后会自动热重载</span></header>
         <div class="body flush" id="rules-table"></div>
@@ -226,18 +277,18 @@
               <label>引擎</label>
               <select id="st-engine"></select>
             </div>
-            <div class="field" style="display:flex;align-items:flex-end">
+            <div class="field align-end">
               <button class="btn primary" id="st-run">发起自检</button>
             </div>
           </div>
-          <div class="hint muted" style="font-size:12px">提示：自检任务需要有一个节点在线接单才会被执行。</div>
+          <p class="note">提示：自检任务需要有一个节点在线接单才会被执行。</p>
         </div>
       </div>
     </section>
 
-    <!-- ── 派活 ── -->
+    <!-- ── 派发 ── -->
     <section class="view" id="view-dispatch">
-      <h2>手动派活</h2>
+      <h2>手动派发</h2>
       <p class="sub">直接指定引擎，跳过规则匹配。用于临时开发任务和一次性查询。</p>
       <div class="panel">
         <header>新建任务</header>
@@ -283,7 +334,7 @@
             <label>工作目录（可选）</label>
             <input id="dp-workdir" placeholder="例如 D:\Projects\my-app">
           </div>
-          <button class="btn primary" id="dp-submit">派活</button>
+          <button class="btn primary" id="dp-submit">派发</button>
         </div>
       </div>
     </section>
@@ -304,6 +355,19 @@
 
 <div id="toast"></div>
 
+<script>
+/* 主题切换：挂一段全局过渡，切换完移除 */
+(function () {
+  document.getElementById('theme-toggle').addEventListener('click', function () {
+    var root = document.documentElement;
+    var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    root.classList.add('theme-anim');
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('hub_theme', next); } catch (e) { /* ignore */ }
+    setTimeout(function () { root.classList.remove('theme-anim'); }, 420);
+  });
+})();
+</script>
 <script src="/static/app.js"></script>
 </body>
 </html>
