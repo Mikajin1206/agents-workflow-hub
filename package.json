@@ -1,0 +1,18 @@
+{
+  "name": "agents-workflow-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "本地自动化 Agent 体系（M1 接入层 / M2 调度中台 / M3 执行层 / M4 质量流水线 / M5 决策反馈 / M6 知识资产）",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "hub": "node src/index.mjs",
+    "worker": "node src/m3/worker.mjs",
+    "cli": "node src/cli.mjs",
+    "test": "node --test test/*.test.mjs",
+    "e2e": "node test/e2e.mjs"
+  }
+}

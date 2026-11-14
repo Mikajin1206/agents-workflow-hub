@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本地自动化 Agent 体系 · 控制台</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2316233F'/><circle cx='16' cy='16' r='6' fill='%2314B8A6'/></svg>">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    本地自动化 Agent 体系
+    <small id="hubname">hub</small>
+  </div>
+  <div class="spacer"></div>
+  <div class="meta">
+    <span>运行 <b id="uptime">-</b></span>
+    <span>规则 <b id="m-rules">-</b></span>
+    <span>技能 <b id="m-skills">-</b></span>
+    <span>飞书 <b id="m-feishu">-</b></span>
+  </div>
+  <button class="btn ghost sm" id="btn-refresh" title="重新拉取所有数据">刷新</button>
+</div>
+
+<div class="layout">
+  <nav class="nav" id="nav">
+    <button data-view="overview" class="active"><span class="ico">◎</span><span class="lbl">总览</span></button>
+    <button data-view="approvals"><span class="ico">✍</span><span class="lbl">批红</span><span class="n" id="n-approvals">0</span></button>
+    <button data-view="tasks"><span class="ico">⚙</span><span class="lbl">任务</span></button>
+    <button data-view="events"><span class="ico">⇥</span><span class="lbl">事件</span></button>
+    <div class="grouplabel">资产</div>
+    <button data-view="pipeline"><span class="ico">⛓</span><span class="lbl">流水线</span></button>
+    <button data-view="reports"><span class="ico">▤</span><span class="lbl">报告</span></button>
+    <button data-view="notify"><span class="ico">◔</span><span class="lbl">通知</span></button>
+    <button data-view="decisions"><span class="ico">⌘</span><span class="lbl">决定记忆</span></button>
+    <div class="grouplabel">配置</div>
+    <button data-view="rules"><span class="ico">≡</span><span class="lbl">规则</span></button>
+    <button data-view="engines"><span class="ico">▷</span><span class="lbl">引擎/技能</span></button>
+    <button data-view="dispatch"><span class="ico">＋</span><span class="lbl">派活</span></button>
+  </nav>
+
+  <main class="main" id="main">
+
+    <!-- ── 总览 ── -->
+    <section class="view active" id="view-overview">
+      <h2>总览</h2>
+      <p class="sub">事件进、中台派、本地干、流水线上线、飞书批红、台账留痕。</p>
+      <div class="cards" id="ov-cards"></div>
+      <div id="ov-warn"></div>
+      <div class="panel">
+        <header>最近事件 <span class="spacer"></span><span class="hint">最新 20 条</span></header>
+        <div class="body flush" id="ov-events"></div>
+      </div>
+      <div class="panel">
+        <header>最近任务 <span class="spacer"></span><span class="hint">最新 20 条</span></header>
+        <div class="body flush" id="ov-tasks"></div>
+      </div>
+    </section>
+
+    <!-- ── 批红 ── -->
+    <section class="view" id="view-approvals">
+      <h2>待批红</h2>
+      <p class="sub">只有必问清单内的七类事项会推到这里：删数据、停服、花钱、对外发消息、改产品方向、新建或轮换密钥、修改权限。</p>
+      <div class="notice info">
+        <span>⚑</span>
+        <span>超时不会默认同意。24 小时未批只升级提醒一次，事情继续挂着。驳回或改派会写进决定记忆，下次同类任务自动带上。</span>
+      </div>
+      <div id="ap-pending"></div>
+      <div class="panel">
+        <header>历史票拟 <span class="spacer"></span><span class="hint">最近 40 条</span></header>
+        <div class="body flush" id="ap-history"></div>
+      </div>
+    </section>
+
+    <!-- ── 任务 ── -->
+    <section class="view" id="view-tasks">
+      <h2>任务</h2>
+      <p class="sub">M2 派活 → M3 本地执行 → 结果回写。</p>
+      <div class="panel">
+        <header>
+          任务列表
+          <span class="spacer"></span>
+          <select id="task-filter" class="btn sm" style="padding:4px 8px">
+            <option value="">全部状态</option>
+            <option value="queued">排队</option>
+            <option value="leased">已派</option>
+            <option value="running">执行中</option>
+            <option value="completed">完成</option>
+            <option value="failed">失败</option>
+            <option value="dead_letter">死信</option>
+            <option value="awaiting_approval">待批红</option>
+          </select>
+        </header>
+        <div class="body flush" id="tasks-table"></div>
+      </div>
+    </section>
+
+    <!-- ── 事件 ── -->
+    <section class="view" id="view-events">
+      <h2>事件</h2>
+      <p class="sub">所有入口进来的统一信封：source / type / target / priority / dedupe_key。</p>
+      <div class="panel">
+        <header>事件列表 <span class="spacer"></span><span class="hint">最近 60 条</span></header>
+        <div class="body flush" id="events-table"></div>
+      </div>
+    </section>
+
+    <!-- ── 流水线 ── -->
+    <section class="view" id="view-pipeline">
+      <h2>质量发布流水线</h2>
+      <p class="sub">① 审查（换引擎、只读，最多 3 轮）② 检查（类型/测试/构建）③ 合并（GitHub 门禁）④ 发布 ⑤ 核实。</p>
+      <div id="pl-list"></div>
+
+      <div class="panel" style="margin-top:16px">
+        <header>手动触发一次流水线</header>
+        <div class="body">
+          <p class="muted" style="font-size:12px;margin-top:0">
+            自动启动关闭时（默认），这是唯一入口。填 PR 所在仓库和编号，五步会按 config 里的模式执行。
+          </p>
+          <div class="form-grid">
+            <label>仓库<input id="pl-repo" type="text" placeholder="owner/name"></label>
+            <label>PR 编号<input id="pl-pr" type="text" placeholder="1"></label>
+            <label>引擎<input id="pl-engine" type="text" value="codex" placeholder="codex"></label>
+          </div>
+          <button class="btn primary" id="pl-run">开始跑</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 报告 ── -->
+    <section class="view" id="view-reports">
+      <h2>报告归档</h2>
+      <p class="sub">日报、周报、巡检报告、长产出都落在 M6 报告库里。</p>
+      <div class="panel">
+        <header>报告列表 <span class="spacer"></span><span class="hint">最近 30 份</span></header>
+        <div class="body flush" id="reports-table"></div>
+      </div>
+      <div class="panel" id="report-detail" style="display:none">
+        <header><span id="rd-title">报告</span><span class="spacer"></span><button class="btn sm" onclick="document.getElementById('report-detail').style.display='none'">关闭</button></header>
+        <div class="body"><pre class="log" id="rd-body"></pre></div>
+      </div>
+    </section>
+
+    <!-- ── 通知流水 ── -->
+    <section class="view" id="view-notify">
+      <h2>通知流水</h2>
+      <p class="sub">该发的到底发出去没有。P0/P1 即时，P2 攒着随战报一起发，P3 只归档。</p>
+      <div id="notify-banner"></div>
+      <div class="panel">
+        <header>最近通知 <span class="spacer"></span><span class="hint">最近 60 条</span></header>
+        <div class="body flush" id="notify-table"></div>
+      </div>
+    </section>
+
+    <!-- ── 决定记忆 ── -->
+    <section class="view" id="view-decisions">
+      <h2>决定记忆</h2>
+      <p class="sub">定过的事、定了不做的事。会被装进每次派活的提示词里。</p>
+      <div class="panel">
+        <header>新增一条 <span class="spacer"></span><span class="hint">亲口说的话越原样越好</span></header>
+        <div class="body">
+          <div class="row3">
+            <div class="field">
+              <label>类型</label>
+              <select id="dc-kind">
+                <option value="decided">定过的事</option>
+                <option value="refused">定了不做的事</option>
+              </select>
+            </div>
+            <div class="field" style="grid-column: span 2">
+              <label>内容</label>
+              <input id="dc-text" placeholder="例如：日报必须 07:30 发，晚于 08:00 就算事故">
+            </div>
+          </div>
+          <div class="field">
+            <label>原话（可选）</label>
+            <input id="dc-quote" placeholder="留空则用上面的内容">
+          </div>
+          <button class="btn primary" id="dc-save">记下来</button>
+        </div>
+      </div>
+      <div class="panel">
+        <header>全部记忆 <span class="spacer"></span><span class="hint" id="dc-count"></span></header>
+        <div class="body flush" id="decisions-table"></div>
+      </div>
+    </section>
+
+    <!-- ── 规则 ── -->
+    <section class="view" id="view-rules">
+      <h2>路由规则</h2>
+      <p class="sub">哪类事件 → 派给哪台机器的哪个引擎 → 带哪个 Skill → 并发上限 → 是否必问。</p>
+      <div class="panel">
+        <header>config/rules.json <span class="spacer"></span><span class="hint">改文件后会自动热重载</span></header>
+        <div class="body flush" id="rules-table"></div>
+      </div>
+      <div class="panel">
+        <header>定时器 <span class="spacer"></span><span class="hint">由规则里的 schedule 字段自动生成</span></header>
+        <div class="body flush" id="timers-table"></div>
+      </div>
+    </section>
+
+    <!-- ── 引擎/技能 ── -->
+    <section class="view" id="view-engines">
+      <h2>引擎与技能</h2>
+      <p class="sub">M3 执行层：Claude Code 主力开发、Codex 运维日报、Mock 自测、Shell 运维脚本。</p>
+      <div class="panel">
+        <header>执行引擎</header>
+        <div class="body flush" id="engines-table"></div>
+      </div>
+      <div class="panel">
+        <header>在线的执行节点</header>
+        <div class="body flush" id="nodes-table"></div>
+      </div>
+      <div class="panel">
+        <header>技能库（SOP）</header>
+        <div class="body flush" id="skills-table"></div>
+      </div>
+      <div class="panel">
+        <header>链路自检 <span class="spacer"></span><span class="hint">派一个 P3 任务走完整条链路</span></header>
+        <div class="body">
+          <div class="row2">
+            <div class="field">
+              <label>引擎</label>
+              <select id="st-engine"></select>
+            </div>
+            <div class="field" style="display:flex;align-items:flex-end">
+              <button class="btn primary" id="st-run">发起自检</button>
+            </div>
+          </div>
+          <div class="hint muted" style="font-size:12px">提示：自检任务需要有一个节点在线接单才会被执行。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 派活 ── -->
+    <section class="view" id="view-dispatch">
+      <h2>手动派活</h2>
+      <p class="sub">直接指定引擎，跳过规则匹配。用于临时开发任务和一次性查询。</p>
+      <div class="panel">
+        <header>新建任务</header>
+        <div class="body">
+          <div class="row2">
+            <div class="field">
+              <label>引擎</label>
+              <select id="dp-engine"></select>
+            </div>
+            <div class="field">
+              <label>节点</label>
+              <select id="dp-node">
+                <option value="any">任意可用节点</option>
+                <option value="win-a">win-a（Windows 主机）</option>
+                <option value="mac-b">mac-b（Mac 笔记本）</option>
+              </select>
+            </div>
+          </div>
+          <div class="row2">
+            <div class="field">
+              <label>优先级</label>
+              <select id="dp-priority">
+                <option value="P2">P2 常规</option>
+                <option value="P0">P0 告警级</option>
+                <option value="P1">P1 决策级</option>
+                <option value="P3">P3 汇总类</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>技能（可选）</label>
+              <select id="dp-skill"><option value="">不装技能</option></select>
+            </div>
+          </div>
+          <div class="field">
+            <label>标题</label>
+            <input id="dp-summary" placeholder="一句话说清要干什么">
+          </div>
+          <div class="field">
+            <label>指令</label>
+            <textarea id="dp-prompt" placeholder="给执行引擎的具体要求。代码任务会止步于开 PR，不会自动上线。"></textarea>
+          </div>
+          <div class="field">
+            <label>工作目录（可选）</label>
+            <input id="dp-workdir" placeholder="例如 D:\Projects\my-app">
+          </div>
+          <button class="btn primary" id="dp-submit">派活</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div class="drawer-wrap" id="drawer-wrap">
+  <div class="drawer">
+    <header>
+      <span class="t" id="drawer-title">详情</span>
+      <span class="spacer"></span>
+      <button class="btn sm" id="drawer-close">关闭</button>
+    </header>
+    <div class="content" id="drawer-content"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
