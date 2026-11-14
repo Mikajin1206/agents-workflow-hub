@@ -898,6 +898,159 @@ pre.log {
   border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
 }
 
+/* ══════════════ 规则编辑器 ══════════════ */
+/* 用原生 <dialog>：焦点陷阱、Esc 关闭、背景 inert 都由浏览器负责，
+   比自己搭一层 div 遮罩可靠得多（也省下几十行 JS）。 */
+
+dialog.sheet {
+  width: min(880px, calc(100vw - 32px));
+  max-height: min(88vh, 900px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper-2);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+dialog.sheet::backdrop {
+  background: var(--scrim);
+  backdrop-filter: blur(3px);
+}
+dialog.sheet[open] { animation: sheet-in .26s cubic-bezier(.16, .84, .28, 1); }
+@keyframes sheet-in {
+  from { transform: translateY(14px) scale(.99); opacity: .5; }
+  to { transform: none; opacity: 1; }
+}
+dialog.sheet > form {
+  display: flex;
+  flex-direction: column;
+  max-height: inherit;
+}
+
+.rule-editor > header {
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--line-2);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.rule-editor > header .t {
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -.2px;
+}
+.rule-editor > header .spacer { flex: 1; }
+.rule-editor > header .mono { font-size: 12px; color: var(--text-3); }
+
+.rule-editor .content {
+  padding: 18px 20px 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.rule-editor > footer {
+  padding: 13px 20px;
+  border-top: 1px solid var(--line-2);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--paper) 45%, var(--paper-2));
+}
+.rule-editor > footer .spacer { flex: 1; }
+.rule-editor > footer .err {
+  color: var(--err);
+  font-size: 12.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 分组：把「什么时候触发 / 派给谁 / 怎么执行」分开，长表单才不会看晕 */
+.rg {
+  margin-bottom: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px dashed var(--line);
+}
+.rg:last-child { border-bottom: none; padding-bottom: 4px; }
+.rg > h4 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: .8px;
+  text-transform: uppercase;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rg > h4::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line-2);
+}
+
+.row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+
+.field .sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin-top: 5px;
+  line-height: 1.5;
+}
+
+/* 开关：用一个 checkbox 伪装成滑动开关，比两个 radio 省空间 */
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  padding: 8px 0;
+}
+.switch input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  position: relative;
+  cursor: pointer;
+  transition: background .18s var(--ease), border-color .18s var(--ease);
+  flex-shrink: 0;
+  margin: 0;
+}
+.switch input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--paper-2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .22);
+  transition: transform .18s var(--ease-spring);
+}
+.switch input:checked { background: var(--accent); border-color: var(--accent); }
+.switch input:checked::after { transform: translateX(16px); }
+.switch input:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+.switch .lbl { font-size: 13.5px; color: var(--text); }
+.switch .hint { font-size: 11.5px; color: var(--text-3); }
+
+/* 规则表：行可点，给一点可点的暗示 */
+#rules-table tbody tr { cursor: pointer; }
+#rules-table tbody tr:hover { background: var(--hover); }
+.mono-xs { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-3); }
+
 /* ── 动效可关闭 ────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

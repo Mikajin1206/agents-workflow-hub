@@ -242,9 +242,14 @@
     <!-- ── 规则 ── -->
     <section class="view" id="view-rules">
       <h2>路由规则</h2>
-      <p class="sub">哪类事件派给哪个节点和引擎、带哪个技能、并发上限、是否需要审批。</p>
+      <p class="sub">哪类事件派给哪个节点和引擎、带哪个技能、并发上限、是否需要审批。点任意一行可直接编辑。</p>
       <div class="panel">
-        <header>config/rules.json <span class="spacer"></span><span class="hint">改文件后会自动热重载</span></header>
+        <header>
+          config/rules.json
+          <span class="spacer"></span>
+          <span class="hint" id="rules-hint">点行编辑 · 保存即生效，无需重启</span>
+          <button class="btn primary sm" id="rule-new" style="margin-left:10px">新建规则</button>
+        </header>
         <div class="body flush" id="rules-table"></div>
       </div>
       <div class="panel">
@@ -352,6 +357,25 @@
     <div class="content" id="drawer-content"></div>
   </div>
 </div>
+
+<!-- 规则编辑：原生 dialog，Esc / 点遮罩关闭由浏览器负责 -->
+<dialog class="sheet" id="rule-dialog">
+  <form method="dialog" class="rule-editor">
+    <header>
+      <span class="t" id="rule-title">编辑规则</span>
+      <span class="mono" id="rule-id"></span>
+      <span class="spacer"></span>
+      <button class="btn sm" type="button" id="rule-cancel">关闭</button>
+    </header>
+    <div class="content" id="rule-form"></div>
+    <footer>
+      <span class="err" id="rule-err"></span>
+      <span class="spacer"></span>
+      <button class="btn danger sm" type="button" id="rule-delete">删除这条规则</button>
+      <button class="btn primary sm" type="button" id="rule-save">保存</button>
+    </footer>
+  </form>
+</dialog>
 
 <div id="toast"></div>
 

@@ -49,7 +49,13 @@ async function api(path, options = {}) {
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
   if (res.status === 401 && path.startsWith('/api/')) askToken();
-  if (!res.ok) throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(data?.error || data?.message || `HTTP ${res.status}`);
+    // 校验类错误带着逐条原因，调用方要能拿到全部错误而不是只看第一条
+    err.bodyText = text;
+    err.errors = data?.errors || null;
+    throw err;
+  }
   return data;
 }
 
@@ -651,13 +657,17 @@ function renderRules() {
     [
       { label: '序号', width: '56px', render: (r) => `<span class="muted">${esc(r.order ?? '-')}</span>` },
       { label: '规则', width: '180px', render: (r) => `<span class="mono">${esc(r.id)}</span>` },
-      { label: '说明', render: (r) => `<div class="trunc">${esc(r.title || '-')}</div>` },
+      {
+        label: '说明',
+        render: (r) => `<div class="trunc">${esc(r.title || '-')}${r.enabled === false ? ' <span class="badge idle">已停用</span>' : ''}</div>`,
+      },
       {
         label: '匹配',
         width: '230px',
         render: (r) => {
           const m = r.match || {};
-          return `<span class="mono">${esc(m.source || '*')} / ${esc(m.type || '*')}</span>`;
+          const extra = m.payload ? ` · ${Object.entries(m.payload).map(([k, v]) => `${k}=${v}`).join(' ')}` : '';
+          return `<span class="mono">${esc(m.source || '*')} / ${esc(m.type || '*')}</span><span class="mono-xs">${esc(extra)}</span>`;
         },
       },
       {
@@ -690,8 +700,9 @@ function renderRules() {
       },
     ],
     state.rules,
-    { empty: '规则文件为空或解析失败' },
+    { onRow: (r) => openRuleEditor(r), empty: '规则文件为空或解析失败' },
   );
+  bindRows(box, state.rules, (r) => openRuleEditor(r));
 
   const tBox = $('#timers-table');
   tBox.innerHTML = table(
@@ -704,6 +715,347 @@ function renderRules() {
     state.timers,
     { empty: '没有定时器' },
   );
+}
+
+/* ── 规则编辑器 ──────────────────────────────────────────────
+   一条规则有三段：什么时候触发（match）/ 派给谁（route）/ 怎么执行（skill+limits+approval）。
+   表单按这三段分组，每个字段都是下拉或带默认值的输入框 —— 手打 `github.pull_request`
+   这种字符串最容易拼错一个下划线，而拼错后规则会安静地永远匹配不上。 */
+
+let ruleCatalog = null;
+let editingRule = null;
+
+async function ensureCatalog() {
+  if (ruleCatalog) return ruleCatalog;
+  try {
+    ruleCatalog = await api('/api/rules/catalog');
+  } catch (err) {
+    // 拿不到目录不致命：退化成「只用当前规则里已有的值」的降级界面
+    ruleCatalog = { sources: [], event_types: [], priorities: [], approval_modes: [], actions: [], cron_presets: [], engines: [], nodes: [], skills: [] };
+  }
+  return ruleCatalog;
+}
+
+function opt(value, label, selected, hint) {
+  return `<option value="${esc(value)}"${String(value) === String(selected) ? ' selected' : ''}>${esc(label)}${hint ? '' : ''}</option>`;
+}
+
+/** 下拉：把目录里的候选拼成 option，并保证当前值一定在列表里（否则显示空白） */
+function selectHtml(id, options, current, { allowEmpty = null } = {}) {
+  const list = [...options];
+  if (allowEmpty !== null) list.unshift({ value: '', label: allowEmpty });
+  const has = list.some((o) => String(o.value) === String(current ?? ''));
+  const extra = !has && current ? [{ value: current, label: `${current}（已不在目录里）` }] : [];
+  const opts = [...list, ...extra]
+    .map((o) => `<option value="${esc(o.value)}"${String(o.value) === String(current ?? '') ? ' selected' : ''}>${esc(o.label)}</option>`)
+    .join('');
+  return `<select id="${id}">${opts}</select>`;
+}
+
+async function openRuleEditor(rule) {
+  const cat = await ensureCatalog();
+  editingRule = rule ? JSON.parse(JSON.stringify(rule)) : null;
+  const r = editingRule || {
+    title: '', order: (Math.max(...state.rules.map((x) => Number(x.order) || 0), 0) || 0) + 10,
+    priority: 'P2', match: { source: '*', type: '' }, route: { node: 'any', engine: '' },
+    skill: '', limits: { per_key: 1, max_parallel: 3, attempts: 2, timeout_seconds: 1800 },
+    approval: false, silent: true, action: 'dispatch',
+  };
+  const m = r.match || {};
+  const rt = r.route || {};
+  const lim = r.limits || {};
+  const sched = r.schedule || null;
+  const cronVal = typeof sched === 'string' ? sched : (sched?.cron || '');
+  const presetHit = cat.cron_presets.some((p) => p.value === cronVal);
+  const isNotify = r.action === 'notify';
+
+  $('#rule-title').textContent = editingRule ? '编辑规则' : '新建规则';
+  $('#rule-id').textContent = editingRule ? editingRule.id : '(保存后自动生成 ID)';
+  $('#rule-delete').style.display = editingRule ? '' : 'none';
+  $('#rule-err').textContent = '';
+
+  const typeOpts = cat.event_types.map((t) => ({ value: t.value, label: `${t.label} · ${t.value}` }));
+  const engineOpts = cat.engines.map((e) => ({ value: e.id, label: `${e.id}${e.available ? '' : '（未安装）'}` }));
+  const skillOpts = cat.skills.map((s) => ({ value: s.name, label: `${s.title} · ${s.name}` }));
+
+  $('#rule-form').innerHTML = `
+    <div class="rg">
+      <h4>什么时候触发</h4>
+      <div class="field">
+        <label>规则说明</label>
+        <input id="rf-title" value="${esc(r.title || '')}" placeholder="一句话说清这条规则管什么，比如「GitHub Issue 自动修复」">
+        <div class="sub">只给人看，会显示在规则表里。</div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label>事件来源</label>
+          ${selectHtml('rf-source', cat.sources, m.source || '*')}
+          <div class="sub" id="rf-source-hint"></div>
+        </div>
+        <div class="field">
+          <label>事件类型</label>
+          ${selectHtml('rf-type', typeOpts, m.type || '')}
+          <div class="sub">决定哪类事件走进来。<code>*</code> 表示任意类型。</div>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label>额外匹配条件（可选）</label>
+          <input id="rf-payload" value="${esc(m.payload ? Object.entries(m.payload).map(([k, v]) => `${k}=${v}`).join(', ') : '')}" placeholder="kind=dev">
+          <div class="sub">按参数精确匹配，形如 <code>kind=dev</code>，多个用逗号分隔。留空表示不限。</div>
+        </div>
+        <div class="field">
+          <label>序号</label>
+          <input id="rf-order" type="number" value="${esc(r.order ?? '')}">
+          <div class="sub">数字小的先匹配。同一事件命中多条规则时，序号小的赢。</div>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label>优先级</label>
+          ${selectHtml('rf-priority', cat.priorities, r.priority || 'P2')}
+        </div>
+        <div class="field">
+          <label>定时触发（可选）</label>
+          ${selectHtml('rf-cron', cat.cron_presets, presetHit ? cronVal : (cronVal ? 'custom' : ''))}
+          <input id="rf-cron-custom" value="${esc(cronVal)}" placeholder="例如 0 18 * * *" style="margin-top:8px;display:${presetHit || !cronVal ? 'none' : 'block'}">
+          <div class="sub">选定后系统会按这个时间自动投递事件。留空表示只被动等待事件。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rg">
+      <h4>派给谁</h4>
+      <div class="row2">
+        <div class="field">
+          <label>处理方式</label>
+          ${selectHtml('rf-action', cat.actions, r.action || 'dispatch')}
+          <div class="sub">「直接推人」用于发布失败这类只需要通知、不需要动手的事。</div>
+        </div>
+        <div class="field" id="rf-notify-wrap" style="display:${isNotify ? '' : 'none'}">
+          <label>通知级别</label>
+          ${selectHtml('rf-notify-level', cat.priorities, r.notify_level || 'P1')}
+        </div>
+      </div>
+      <div id="rf-dispatch-wrap" style="display:${isNotify ? 'none' : ''}">
+        <div class="row2">
+          <div class="field">
+            <label>执行引擎</label>
+            ${selectHtml('rf-engine', engineOpts, rt.engine || '', { allowEmpty: '— 请选择 —' })}
+            <div class="sub" id="rf-engine-hint"></div>
+          </div>
+          <div class="field">
+            <label>执行节点</label>
+            ${selectHtml('rf-node', [{ value: 'any', label: '任意可用节点' }, ...cat.nodes.map((n) => ({ value: n.id, label: `${n.label} · ${n.id}` }))], rt.node || 'any')}
+            <div class="sub">节点必须在线且声明了该引擎，否则任务会排队并触发饥饿告警。</div>
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label>技能（SOP）</label>
+            ${selectHtml('rf-skill', skillOpts, r.skill || '', { allowEmpty: '不装技能（用提示词直接说）' })}
+            <div class="sub">技能决定执行步骤。开发类务必用 repo-dev（写死「止步于开 PR」）。</div>
+          </div>
+          <div class="field">
+            <label>工作目录（可选）</label>
+            <input id="rf-workdir" value="${esc(rt.workdir || '')}" placeholder="D:\\Projects\\my-app">
+            <div class="sub">留空则用中台自己所在目录 —— 代码任务一定要填，否则会在错的仓库里跑。</div>
+          </div>
+        </div>
+        <div class="field">
+          <label>额外指令（可选）</label>
+          <textarea id="rf-prompt" placeholder="追加到技能之后的具体要求，例如「改完必须 typecheck + build 都过」">${esc(r.prompt || '')}</textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="rg">
+      <h4>怎么执行</h4>
+      <div class="row3" id="rf-limits" style="display:${isNotify ? 'none' : ''}">
+        <div class="field">
+          <label>同键并发</label>
+          <input id="rf-per-key" type="number" min="0" value="${esc(lim.per_key ?? 1)}">
+          <div class="sub">同一 dedupe_key 同时跑几个。0 表示不限制。</div>
+        </div>
+        <div class="field">
+          <label>总并发</label>
+          <input id="rf-max-parallel" type="number" min="1" value="${esc(lim.max_parallel ?? 3)}">
+          <div class="sub">这类事件最多同时跑几个。</div>
+        </div>
+        <div class="field">
+          <label>最多尝试次数</label>
+          <input id="rf-attempts" type="number" min="1" value="${esc(lim.attempts ?? 2)}">
+          <div class="sub">失败后重试，用完进死信。</div>
+        </div>
+      </div>
+      <div class="field" id="rf-timeout-wrap" style="display:${isNotify ? 'none' : ''}">
+        <label>超时（秒）</label>
+        <input id="rf-timeout" type="number" min="60" value="${esc(lim.timeout_seconds ?? 1800)}">
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label>审批</label>
+          ${selectHtml('rf-approval', cat.approval_modes, r.approval === 'always' ? 'always' : 'no')}
+          <div class="sub">「必须先批红」会让任务停在待批，不批不跑。删数据、停服这类一定要设。</div>
+        </div>
+        <div class="field">
+          <label>结果是否通知人</label>
+          <label class="switch">
+            <input type="checkbox" id="rf-silent" ${r.silent === false ? 'checked' : ''}>
+            <span>
+              <span class="lbl">完成后推送结果</span>
+              <span class="hint">关掉 = 只写台账不打扰（白名单外的默认做法）</span>
+            </span>
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <label>启用状态</label>
+        <label class="switch">
+          <input type="checkbox" id="rf-enabled" ${r.enabled === false ? '' : 'checked'}>
+          <span>
+            <span class="lbl">这条规则生效</span>
+            <span class="hint">临时停用可以取消勾选，规则留在文件里但不再匹配</span>
+          </span>
+        </label>
+      </div>
+    </div>
+  `;
+
+  // 联动：处理方式决定下半张表单显示哪些段
+  const actionSel = $('#rf-action');
+  actionSel.addEventListener('change', () => {
+    const notify = actionSel.value === 'notify';
+    $('#rf-notify-wrap').style.display = notify ? '' : 'none';
+    $('#rf-dispatch-wrap').style.display = notify ? 'none' : '';
+    $('#rf-limits').style.display = notify ? 'none' : '';
+    $('#rf-timeout-wrap').style.display = notify ? 'none' : '';
+  });
+
+  // 联动：来源过滤事件类型候选（只保留同来源与通配的）
+  const syncTypeOptions = () => {
+    const src = $('#rf-source').value;
+    const keep = $('#rf-type').value;
+    const list = cat.event_types.filter((t) => t.source === '*' || t.source === src || src === '*');
+    $('#rf-type').innerHTML = list
+      .map((t) => `<option value="${esc(t.value)}"${t.value === keep ? ' selected' : ''}>${esc(t.label)} · ${esc(t.value)}</option>`)
+      .join('');
+  };
+  $('#rf-source').addEventListener('change', () => {
+    syncTypeOptions();
+    const hit = cat.sources.find((s) => s.value === $('#rf-source').value);
+    $('#rf-source-hint').textContent = hit?.hint || '';
+  });
+  const srcHint = cat.sources.find((s) => s.value === ($('#rf-source').value));
+  $('#rf-source-hint').textContent = srcHint?.hint || '';
+
+  $('#rf-engine').addEventListener('change', () => {
+    const id = $('#rf-engine').value;
+    const online = (state.nodes || []).filter((n) => n.online && (n.engines || []).includes(id)).map((n) => n.id);
+    $('#rf-engine-hint').textContent = id
+      ? (online.length ? `当前在线可接：${online.join('、')}` : '此刻没有节点声明这个引擎，派出去会排队')
+      : '';
+  });
+
+  // 定时：选「自定义」时露出输入框
+  $('#rf-cron').addEventListener('change', () => {
+    const v = $('#rf-cron').value;
+    const box = $('#rf-cron-custom');
+    if (v === 'custom') { box.style.display = 'block'; box.focus(); } else { box.style.display = 'none'; box.value = v; }
+  });
+
+  $('#rule-dialog').showModal();
+  setTimeout(() => $('#rf-title')?.focus(), 40);
+}
+
+/** 把表单读回成一个 patch（只带用户改动的字段，其余交给后端深合并） */
+function readRuleForm() {
+  const isNotify = $('#rf-action').value === 'notify';
+  const payloadText = $('#rf-payload').value.trim();
+  let payload;
+  if (payloadText) {
+    payload = {};
+    for (const pair of payloadText.split(/[,，]/)) {
+      const [k, ...rest] = pair.split('=');
+      if (!k.trim()) continue;
+      const v = rest.join('=').trim();
+      payload[k.trim()] = v === '' ? true : (v === 'true' ? true : v === 'false' ? false : (Number.isFinite(Number(v)) && v !== '' ? Number(v) : v));
+    }
+  }
+  const cronPick = $('#rf-cron').value;
+  const cronExpr = cronPick === 'custom' ? $('#rf-cron-custom').value.trim() : cronPick;
+
+  const patch = {
+    title: $('#rf-title').value.trim(),
+    order: Number($('#rf-order').value) || undefined,
+    priority: $('#rf-priority').value,
+    action: $('#rf-action').value,
+    approval: $('#rf-approval').value === 'always' ? 'always' : false,
+    silent: !$('#rf-silent').checked,
+    enabled: $('#rf-enabled').checked,
+    match: {
+      source: $('#rf-source').value,
+      type: $('#rf-type').value,
+      payload: payload || null,
+    },
+    schedule: cronExpr ? { cron: cronExpr, name: $('#rf-title').value.trim() || undefined, priority: $('#rf-priority').value } : null,
+  };
+  if (isNotify) {
+    patch.notify_level = $('#rf-notify-level').value;
+    patch.route = null;
+    patch.limits = null;
+  } else {
+    patch.route = {
+      node: $('#rf-node').value,
+      engine: $('#rf-engine').value,
+      workdir: $('#rf-workdir').value.trim(),
+    };
+    patch.skill = $('#rf-skill').value;
+    patch.prompt = $('#rf-prompt').value.trim();
+    patch.limits = {
+      per_key: Number($('#rf-per-key').value) || 0,
+      max_parallel: Number($('#rf-max-parallel').value) || 1,
+      attempts: Number($('#rf-attempts').value) || 1,
+      timeout_seconds: Number($('#rf-timeout').value) || 1800,
+    };
+  }
+  return patch;
+}
+
+async function saveRule() {
+  const patch = readRuleForm();
+  const btn = $('#rule-save');
+  btn.disabled = true;
+  $('#rule-err').textContent = '';
+  try {
+    const res = editingRule
+      ? await api(`/api/rules/${encodeURIComponent(editingRule.id)}`, { method: 'PUT', body: patch })
+      : await api('/api/rules', { method: 'POST', body: patch });
+    $('#rule-dialog').close();
+    toast(editingRule ? '规则已保存并生效' : `规则已创建：${res.rule.id}`);
+    await loadAll();
+  } catch (err) {
+    // 校验失败时把每条原因都摆出来，不要只说「保存失败」
+    let msg = err.message;
+    try { const body = JSON.parse(err.bodyText || '{}'); if (body.errors?.length) msg = body.errors.join('；'); } catch { /* 用原消息 */ }
+    $('#rule-err').textContent = msg;
+    toast(msg, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function deleteRule() {
+  if (!editingRule) return;
+  if (!confirm(`删除规则「${editingRule.title || editingRule.id}」？\n\n删除后这类事件将不再被自动派活。`)) return;
+  try {
+    await api(`/api/rules/${encodeURIComponent(editingRule.id)}`, { method: 'DELETE' });
+    $('#rule-dialog').close();
+    toast('规则已删除');
+    await loadAll();
+  } catch (err) {
+    toast(`删除失败：${err.message}`, true);
+  }
 }
 
 /* ── 引擎/技能 ── */
@@ -1028,6 +1380,16 @@ function bind() {
     } catch (err) {
       toast(err.message, true);
     }
+  });
+
+  // 规则编辑器：新建 / 保存 / 删除 / 关闭
+  $('#rule-new').addEventListener('click', () => openRuleEditor(null));
+  $('#rule-save').addEventListener('click', saveRule);
+  $('#rule-delete').addEventListener('click', deleteRule);
+  $('#rule-cancel').addEventListener('click', () => $('#rule-dialog').close());
+  // 点遮罩关闭（dialog 自身的点击目标就是 dialog 元素时说明点在了背景上）
+  $('#rule-dialog').addEventListener('click', (e) => {
+    if (e.target.id === 'rule-dialog') $('#rule-dialog').close();
   });
 }
 

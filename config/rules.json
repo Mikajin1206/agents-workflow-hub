@@ -28,9 +28,11 @@
       "silent": false,
       "schedule": {
         "cron": "30 7 * * *",
-        "name": "每日战报",
+        "name": "每日 07:30 战报",
         "priority": "P2"
-      }
+      },
+      "enabled": true,
+      "action": "dispatch"
     },
     {
       "id": "r02-monitor-alert",
@@ -273,31 +275,6 @@
       "prompt": "发布或 CI 失败，线上可能未更新，需要立刻处理。",
       "approval": true,
       "silent": false
-    },
-    {
-      "id": "r12-ccswitch-dev",
-      "title": "ccswitch 开发任务（真实项目，全自动到 PR）",
-      "order": 45,
-      "priority": "P2",
-      "match": {
-        "source": "feishu",
-        "type": "ccswitch.dev"
-      },
-      "route": {
-        "node": "win-a",
-        "engine": "claude-code",
-        "workdir": "D:\\Agents Workflow\\work\\ccswitch-connect-workbuddy"
-      },
-      "skill": "repo-dev",
-      "prompt": "目标仓库 D:\\Agents Workflow\\work\\ccswitch-connect-workbuddy（GitHub Mikajin1206/ccswitch-connect-workbuddy）。按上面的需求实现：改动前先 npm run typecheck 确认基线是绿的，改完必须 typecheck + build 都过，然后提交并开 PR。止步于开 PR，不合并、不发布——合并与发布由 M4 五步流水线负责。",
-      "limits": {
-        "per_key": 0,
-        "max_parallel": 1,
-        "attempts": 2,
-        "timeout_seconds": 3600
-      },
-      "approval": false,
-      "silent": true
     },
     {
       "id": "r13-feishu-dev",

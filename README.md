@@ -129,7 +129,8 @@ Full command reference: [docs/部署运维.md](docs/部署运维.md) (Chinese).
 - ✅ M1–M6 all implemented; hub and executor nodes run as independent processes
 - ✅ Web panel with 11 views (overview / approvals / tasks / events / pipeline / reports / notifications / decision memory / rules / engines & skills / dispatch)
 - ✅ Ledger, dedupe, retries, dead-letter, long-poll leases, approval state machine, tiered notifications, decision memory, report archive
-- ✅ Unit tests: 53 green; e2e self-test: 102 assertions
+- ✅ Unit tests: 54 green; e2e self-test: 102 assertions
+- ✅ Rules are editable from the panel: click any row, every option is a dropdown fed by `/api/rules/catalog` (installed engines, configured nodes, skills on disk, cron presets). Saves are validated before touching the file (unknown engine/node/skill or unparsable cron is rejected wholesale), written atomically, and applied without a restart
 - ✅ All four engines working: `claude-code` / `codex` / `mock` / `shell`
 - ✅ Feishu bidirectional over websocket: P0/P1 notifications and approval cards pushed to a Feishu group; approve directly from card buttons (with toast receipt); dispatch tasks by sending messages in the group. No public IP / domain / TLS needed
 - ✅ M4 pipeline supports `mode: "real"` — five steps exercised end-to-end on a real repo, including a real merge

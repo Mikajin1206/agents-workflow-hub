@@ -5,6 +5,10 @@ import path from 'node:path';
 import { loadConfig, nowIso } from './lib/config.mjs';
 import { Router, createCtx, readBody, parseBody, verifyHmacSha256, serveStatic } from './lib/http.mjs';
 import { Hub } from './hub.mjs';
+import { parseCron } from './lib/cron.mjs';
+import {
+  SOURCES, EVENT_TYPES, PRIORITIES, APPROVAL_MODES, ACTIONS, CRON_PRESETS,
+} from './lib/catalog.mjs';
 
 /**
  * 中台 HTTP 服务（唯一监听端口，默认 127.0.0.1:8787）。
@@ -144,7 +148,7 @@ router.get('/api/rules', (ctx) => {
     error: hub.rules.error,
     file: cfg.paths.rules,
     rules: hub.rules.all().map((r) => ({
-      id: r.id, title: r.title, enabled: r.enabled, order: r.order,
+      id: r.id, title: r.title, enabled: r.enabled, order: r.order, priority: r.priority,
       match: r.match, route: r.route, skill: r.skill, limits: r.limits,
       approval: r.approval, silent: r.silent, action: r.action, notify_level: r.notifyLevel,
       prompt: r.prompt || null,
@@ -152,6 +156,87 @@ router.get('/api/rules', (ctx) => {
     })),
   });
 });
+
+/**
+ * 面板编辑规则的选项目录：来源、事件类型、引擎、节点、技能、cron 预设。
+ * 集中在一个接口里返回，前端就不必硬编码这些字符串 —— 拼错一个下划线，
+ * 规则会安静地永远匹配不上。
+ */
+router.get('/api/rules/catalog', (ctx) => {
+  if (!guard(ctx)) return;
+  const engines = hub.snapshot().hub.engines.filter((e) => e.available).map((e) => e.id);
+  ctx.json({
+    ok: true,
+    sources: SOURCES,
+    event_types: EVENT_TYPES,
+    priorities: PRIORITIES,
+    approval_modes: APPROVAL_MODES,
+    actions: ACTIONS,
+    cron_presets: CRON_PRESETS,
+    engines: hub.snapshot().hub.engines.map((e) => ({ id: e.id, label: e.describe || e.id, available: Boolean(e.available) })),
+    nodes: (cfg.nodes || []).map((n) => ({ id: n.id, label: n.label || n.id, engines: n.engines || [] })),
+    skills: hub.skills.list().map((s) => ({ name: s.name, title: s.meta?.title || s.name })),
+    engines_runnable: engines,
+  });
+});
+
+/* 新建一条规则 */
+router.post('/api/rules', (ctx) => {
+  if (!guard(ctx)) return;
+  try {
+    const rule = hub.rules.create(ctx.body || {}, ruleValidateOptions());
+    hub.cron.loadFromRules(hub.rules);
+    ctx.json({ ok: true, rule: publicRule(rule) }, 201);
+  } catch (err) {
+    const code = err.code === 'INVALID' ? 422 : err.code === 'NOT_FOUND' ? 404 : 500;
+    ctx.json({ ok: false, error: err.message, errors: err.errors || [err.message] }, code);
+  }
+});
+
+/* 改一条规则 */
+router.put('/api/rules/:id', (ctx) => {
+  if (!guard(ctx)) return;
+  try {
+    const rule = hub.rules.save(ctx.params.id, ctx.body || {}, ruleValidateOptions());
+    hub.cron.loadFromRules(hub.rules);
+    ctx.json({ ok: true, rule: publicRule(rule) });
+  } catch (err) {
+    const code = err.code === 'INVALID' ? 422 : err.code === 'NOT_FOUND' ? 404 : 500;
+    ctx.json({ ok: false, error: err.message, errors: err.errors || [err.message] }, code);
+  }
+});
+
+/* 删一条规则 */
+router.delete('/api/rules/:id', (ctx) => {
+  if (!guard(ctx)) return;
+  try {
+    const gone = hub.rules.remove(ctx.params.id);
+    hub.cron.loadFromRules(hub.rules);
+    ctx.json({ ok: true, removed: gone.id, count: hub.rules.size });
+  } catch (err) {
+    ctx.json({ ok: false, error: err.message }, err.code === 'NOT_FOUND' ? 404 : 500);
+  }
+});
+
+/** 校验时可用的引擎/节点/技能清单 */
+function ruleValidateOptions() {
+  const snap = hub.snapshot();
+  return {
+    engines: snap.hub.engines.filter((e) => e.available).map((e) => e.id),
+    nodes: (cfg.nodes || []).map((n) => n.id),
+    skills: hub.skills.list().map((s) => s.name),
+    parseCron,
+  };
+}
+
+function publicRule(r) {
+  return {
+    id: r.id, title: r.title, enabled: r.enabled, order: r.order, priority: r.priority,
+    match: r.match, route: r.route, skill: r.skill, limits: r.limits,
+    approval: r.approval, silent: r.silent, action: r.action, notify_level: r.notifyLevel,
+    prompt: r.prompt || null, schedule: r.raw?.schedule || null,
+  };
+}
 
 router.get('/api/engines', (ctx) => {
   ctx.json({
