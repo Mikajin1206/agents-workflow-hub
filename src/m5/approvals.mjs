@@ -472,7 +472,9 @@ const KEYWORD_SYNONYMS = {
   停服: ['停掉', '停用', '暂停服务', '关停', '停服'],
   停止服务: ['停掉服务', '关停', '停用服务'],
   花钱: ['付费', '收费', '开支', '成本', '购买'],
-  对外发消息: ['对外', '群发', '发布到', '发出去'],
+  // 同义词必须是「动作短语」。曾经写成 ['对外', ...]，结果模型复述规则时写的
+  // 「未向飞书发送消息；对外发送需要批红」被「对外」两字命中，每答一句推一张批红卡。
+  对外发消息: ['对外发', '对外发送', '对外通知', '对外公布', '对外发布', '发给外部', '群发', '发出去'],
   改产品方向: ['产品方向', '改方向', '转型', '砍掉'],
   轮换密钥: ['轮换密钥', '新建密钥', '重置密钥', '密钥轮换', 'apikey', 'api key', 'token 轮换', '改密码'],
   // 注意：这里的同义词必须是「动作短语」，不能只写名词。
@@ -606,8 +608,32 @@ const CONTENT_NOUNS = ['回执', '记录', '日志', '结果', '状态', '历史
 /** 投递目标标记：出现这些字说明名词只是宾语，后面才是「发给谁」——那是真动作 */
 const TARGET_MARKERS = ['给', '到', '向', '至', '于', '为', '往', '跟'];
 
+/**
+ * 政策陈述标记：命中之后紧跟着这些说法，是在描述「这件事要走审批」，
+ * 不是在请求执行这件事。
+ *
+ * 实测：一条回复写「未向飞书发送消息；对外发送需要批红。」——
+ * 模型在复述白名单规则，系统却把「对外发」判成要做「对外发消息」，又推一张批红卡。
+ * 同一个模型每次回答都会复述这条规则，不拦住就每问一句推一张卡。
+ */
+const POLICY_MARKERS = ['需要批红', '需批红', '要批红', '待批红', '需要审批', '需审批', '需要批准', '需批准', '必须批红', '需人工'];
+
+/** 真正的请求语气：出现这些说法时，即使讲了「需要批红」也是在请求执行，必须留卡 */
+const REQUEST_MARKERS = ['请批准', '请批', '是否准予', '同意执行', '申请批准', '请审批', '盼批准', '准予'];
+
 function notAnAction(hay, index, text) {
   const t = String(text || '');
+  // 判据一：命中后面紧跟「需要批红」这类说法 —— 在陈述规则，不是请求执行。
+  // 模型每次回答都会复述「对外发送需要批红」这条铁律，不拦住就每问一句推一张卡。
+  // 但如果同一句里还有请求语气（「请批准」「是否准予」），那是真的在申请人批，
+  // 必须留卡 —— 漏一张该批的卡比多推一张严重。
+  const trailing = hay.slice(index + t.length, index + t.length + 14);
+  if (POLICY_MARKERS.some((m) => trailing.includes(m))) {
+    const stop = hay.indexOf('。', index);
+    const sentence = hay.slice(index, stop === -1 ? hay.length : stop + 1);
+    if (!REQUEST_MARKERS.some((m) => sentence.includes(m))) return true;
+  }
+  // 判据二：动词 + 内容名词，且名词后面没有投递目标 —— 名词短语
   const verb = ACTION_VERB_HEADS.find((v) => t.startsWith(v) && t.length > v.length);
   if (!verb) return false;
   const rest = t.slice(verb.length);
@@ -643,7 +669,9 @@ function matchKeyword(hay, keyword) {
       for (;;) {
         const at = hay.indexOf(needle, from);
         if (at < 0) break;
-        if (!negatedBefore(hay, at)) return true;
+        // 关键词通道同样要排除「在描述/在复述规则」：模型答一句「对外发送需要批红」
+        // 里没有动作，但它包含关键词「对外发送」——不拦就会每答一次推一张卡。
+        if (!negatedBefore(hay, at) && !notAnAction(hay, at, hay.slice(at, at + needle.length))) return true;
         from = at + needle.length;
       }
     }

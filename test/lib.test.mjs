@@ -263,6 +263,23 @@ test('动词只是定语的短语不算动作，但真动作一个都不能漏�
       `漏判（对外发消息）：${t} → ${JSON.stringify(svc.classify(t))}`,
     );
   }
+  // 复述规则 ≠ 请求执行：模型每次回答都会写「对外发送需要批红」，
+  // 但同义词表里曾有裸词「对外」，于是每答一句推一张卡。
+  const policyStatements = [
+    '未向飞书发送消息；对外发送需要批红。',
+    '做完了\n- 回执内容：已收到\n- 未修改文件，未运行命令。\n- 未向飞书发送消息；对外发送需要批红。',
+    '删除数据需要批红',
+    '停服需要审批',
+  ];
+  for (const t of policyStatements) {
+    assert.equal(svc.classify(t).length, 0, `误判（政策陈述）：${t} → ${JSON.stringify(svc.classify(t))}`);
+  }
+  // 但带请求语气的必须留卡 —— 漏一张该批的卡比多推一张严重
+  assert.ok(
+    svc.classify('删除旧表需要批红，请批准').includes('delete_data'),
+    '漏判：删除旧表需要批红，请批准',
+  );
+
   // 其它类别的裸语义命中同样不能被这条判据误伤（它们没有关键词旁路兜底）
   assert.ok(svc.classify('更换证书等敏感材料').includes('secret_rotate'), '漏判（轮换密钥）：更换证书等敏感材料');
   assert.ok(svc.classify('放开权限中的写入限制').includes('permissions'), '漏判（改权限）：放开权限中的写入限制');
