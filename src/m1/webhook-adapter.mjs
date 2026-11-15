@@ -152,7 +152,8 @@ export class WebhookAdapter {
     }
     if (!text) throw Object.assign(new Error('飞书回调缺少可用文本'), { code: 'EMPTY_TEXT' });
     // 「发任务」约定：dev: 开头 = 开发类任务（走 repo-dev，止步 PR），其余 = 查询/操作类。
-    const trimmed = text.trim();
+    const trimmed = stripMentions(text);
+    if (!trimmed) throw Object.assign(new Error('飞书回调只有 @ 没有正文'), { code: 'EMPTY_TEXT' });
     const isDev = /^dev[:：]/i.test(trimmed);
     const devText = isDev ? trimmed.replace(/^dev[:：]\s*/i, '') : trimmed;
     return makeEnvelope({
@@ -171,6 +172,19 @@ export class WebhookAdapter {
       },
     });
   }
+}
+
+/**
+ * 飞书把 @某人 在纯文本里替换成 `@_user_1` 这样的占位符（@所有人 是 `@_all`）。
+ * 群聊里必须 @ 机器人才收得到消息，于是每条指令都会带着这个占位符进来：
+ * 既污染模型收到的指令，也污染台账标题（「@_user_1 现在工作状态报告」）。
+ */
+function stripMentions(text) {
+  return String(text || '')
+    .replace(/@_user_\d+/g, ' ')
+    .replace(/@_all\b/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 function extractFeishuText(msg) {

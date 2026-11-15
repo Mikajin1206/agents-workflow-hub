@@ -148,6 +148,21 @@ test('feishu: 消息文本能从 post 富文本里抽出来', () => {
   assert.equal(env.dedupe_key, 'feishu.msg#om_1');
 });
 
+test('feishu: @ 占位符不能进指令（群聊里每条都要 @ 机器人）', () => {
+  const a = makeAdapter();
+  const mk = (text) => a.feishu({
+    event: { message: { message_id: 'om_x', chat_id: 'oc_1', content: JSON.stringify({ text }) } },
+  });
+  // 飞书把 @某人 换成 @_user_N，@所有人 换成 @_all
+  assert.equal(mk('@_user_1 现在工作状态报告').summary, '现在工作状态报告');
+  assert.equal(mk('@_user_1 现在工作状态报告').payload.text, '现在工作状态报告');
+  assert.equal(mk('@_all 汇报一下今天的情况').payload.text, '汇报一下今天的情况');
+  // dev: 前缀判定要在剥掉 @ 之后 —— 否则「@_user_1 dev: xxx」认不出是开发任务
+  assert.equal(mk('@_user_1 dev: 给 README 加 FAQ').payload.dev, true);
+  // 只有 @ 没有正文：不能派一个空任务出去
+  assert.throws(() => mk('@_user_1'), (e) => e.code === 'EMPTY_TEXT');
+});
+
 test('feishu: 卡片按钮回调翻译成 feishu.card_action', () => {
   const a = makeAdapter();
   const env = a.feishu({
