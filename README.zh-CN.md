@@ -84,7 +84,7 @@ hub/
 │  ├─ smoke.mjs                  # 库表完整性自检
 │  └─ service/                   # wscript 守护 + 计划任务（Windows 常驻）
 ├─ test/
-│  ├─ e2e.mjs                    # 端到端自测，102 项断言
+│  ├─ e2e.mjs                    # 端到端自测，108 项断言
 │  ├─ lib.test.mjs               # 纯函数单元测试
 │  ├─ m1.test.mjs                # 接入层测试
 │  └─ feishu*.test.mjs           # 飞书签名/长连接测试
@@ -108,7 +108,7 @@ node src\cli.mjs approvals       # 看待批红
 node src\cli.mjs approve apr_xx  # 批红
 node src\cli.mjs reject apr_xx --note "先别动"
 node --test test/*.test.mjs      # 单元测试（53 项）
-node test\e2e.mjs                # 端到端自测（102 项）
+node test\e2e.mjs                # 端到端自测（108 项）
 node scripts\smoke.mjs           # 库表完整性
 scripts\backup.cmd               # 备份台账与报告（可挂每日任务）
 ```
@@ -129,7 +129,7 @@ scripts\backup.cmd               # 备份台账与报告（可挂每日任务）
 - ✅ M1–M6 全部实现，中台与执行节点可独立进程运行
 - ✅ 面板 11 个视图可用（总览/批红/任务/事件/流水线/报告/通知/决定记忆/规则/引擎技能/派活）
 - ✅ 台账、去重、重试、死信、长轮询租约、批红状态机、通知分层、决定记忆、报告归档
-- ✅ 单元测试 54 项全绿；e2e 自测 102 项断言
+- ✅ 单元测试 55 项全绿；e2e 自测 108 项断言
 - ✅ 规则可在面板直接改：点任意一行弹编辑器，选项全部是下拉（`/api/rules/catalog` 提供已安装引擎、配置里的节点、磁盘上的技能、cron 预设）。保存前先校验（引擎/节点/技能不存在或 cron 解析不了就整笔拒绝），写盘是原子的，改完不用重启
 - ✅ 四个引擎全部可用：`claude-code` / `codex` / `mock` / `shell`
 - ✅ 飞书已接入（长连接双向）：P0/P1 通知与批红卡推送到飞书群；卡片按钮直接批红（带 toast 回执）；群里发消息可派任务。长连接不需要公网 IP/域名证书

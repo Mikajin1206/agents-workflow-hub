@@ -295,6 +295,52 @@ async function main() {
   const notifyAfter = hub.notifier.listRecent(200).length;
   ok(notifyAfter > notifyBefore, 'regression: 非静默任务完成会推送给', { notifyBefore, notifyAfter });
 
+  // 回归（2026-11-15）：飞书提问的产出曾因为规则 silent:true + P3 级别，
+  // 进了聚合队列或归档，人在群里问了问题、看见任务跑完，却永远收不到答案。
+  // 回复不是系统主动打扰，必须立刻回到提问的会话。
+  const replyHub = await makeHub('feishu-reply');
+  try {
+    const rh = replyHub.hub;
+    await rh.notifier.notify({ level: 'P2', kind: 'x', title: '主动通知仍应进聚合' });
+    const digestAfterActive = rh.ledger.get("SELECT count(*) AS c FROM notifications WHERE channel='digest'").c;
+    ok(digestAfterActive >= 1, 'regression: 系统主动的 P2 仍走聚合（不受回复逻辑影响）', { digestAfterActive });
+
+    await rh.notifier.notify({
+      level: 'P3', kind: 'feishu_reply', title: '回答低优先级提问',
+      body: '这是回答，不该被归档', chatId: 'oc_test',
+    });
+    const replyRow = rh.ledger.all("SELECT level, channel, status, target FROM notifications WHERE kind='feishu_reply' ORDER BY created_at DESC LIMIT 1")[0];
+    ok(replyRow && replyRow.channel !== 'archive', 'regression: 飞书回复即使是 P3 也不能只归档', { replyRow });
+    ok(replyRow && replyRow.channel !== 'digest', 'regression: 飞书回复不能进聚合队列（否则永远等不到）', { replyRow });
+
+    await rh.notifier.notify({
+      level: 'P2', kind: 'feishu_reply', title: '回答 P2 提问', body: 'b', chatId: 'oc_test',
+    });
+    const replyP2 = rh.ledger.all("SELECT channel FROM notifications WHERE kind='feishu_reply' ORDER BY created_at DESC LIMIT 1")[0];
+    ok(replyP2 && replyP2.channel !== 'digest', 'regression: P2 回复同样不进聚合', { replyP2 });
+
+    // 真实链路：飞书来源的任务即便规则 silent:true 也要推给提问者
+    const envId = rh.events.ingest({
+      source: 'feishu', type: 'feishu.message', target: 'ou_test', summary: '现在的工作状态',
+      dedupe_key: 'feishu-reply-probe', priority: 'P3',
+      payload: { text: '现在的工作状态', chat_id: 'oc_test_chat' },
+    }, 'test');
+    await new Promise((r) => setTimeout(r, 60));
+    // r14 派给 codex，所以这里要声明 codex 才领得走（只声明 mock 会一直排队）
+    const pulled = await rh.queue.poll({ nodeId: 'win-a', engines: ['codex', 'mock'], waitSeconds: 2 });
+    if (pulled) {
+      rh.queue.complete(pulled.task_id, 'win-a', { ok: true, text: '中台在线，一切正常。', engine: 'mock' });
+      await rh.afterTaskUpdate(pulled.task_id);
+    }
+    const taskReply = rh.ledger.all("SELECT kind, channel FROM notifications WHERE kind='feishu_reply' ORDER BY created_at DESC LIMIT 1")[0];
+    ok(Boolean(pulled), 'regression: 飞书消息能派成任务', { eventId: envId?.event_id });
+    ok(taskReply && taskReply.channel !== 'archive', 'regression: 飞书任务产出一律回话（silent 不拦）', { taskReply });
+  } finally {
+    replyHub.hub.queue.stop();
+    replyHub.hub.ledger.close();
+  }
+
+
   // 回归（2026-11-14）：聚合任务（战报/周报）自己也曾进聚合队列，
   // 于是 07:30 跑完的战报只是「攒起来等下一条战报带」，永远没人收到。
   await hub.notifier.notify({ level: 'P2', kind: 'test', title: '待聚合的一条', body: 'b' });

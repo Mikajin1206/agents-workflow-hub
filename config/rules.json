@@ -302,7 +302,7 @@
         "timeout_seconds": 3600
       },
       "approval": false,
-      "silent": true
+      "silent": false
     },
     {
       "id": "r14-feishu-query",
@@ -326,7 +326,7 @@
         "timeout_seconds": 900
       },
       "approval": false,
-      "silent": true
+      "silent": false
     }
   ]
 }

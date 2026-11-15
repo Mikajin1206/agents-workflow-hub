@@ -227,6 +227,47 @@ test('classify 端到端：正例命中、反例不误报', () => {
   }
 });
 
+test('动词只是定语的短语不算动作，但真动作一个都不能漏（notAnAction）', () => {
+  // 实测误判：飞书回复里写「端到端结果需查看飞书发送回执或群内实际消息」，
+  // 被 outbound_message 的 `(发送|…){0,14}(客户|用户|群|…)` 命中成「发送回执或群」，
+  // 又推了一张「对外发消息」的批红卡 —— 这句话只是在说「去看回执」。
+  // 第一版判据只看命中后一个字是否方位词，结果把真动作也放过了：
+  // 「通知客户的负责人」「通知客户等三个部门」「发送报告给客户」全被判成不是动作。
+  // 白名单漏判远多于错推严重，所以下面「必须命中」那组是硬约束。
+  const svc = Object.create(ApprovalService.prototype);
+  svc.config = loadConfig();
+
+  // 名词短语 / 描述：不是动作
+  const nounPhrases = [
+    '端到端结果需查看飞书发送回执或群内实际消息',
+    '需查看飞书发送回执或群内实际消息',
+    '请查看推送记录和通知日志',
+  ];
+  for (const t of nounPhrases) {
+    assert.equal(svc.classify(t).length, 0, `误判：${t} → ${JSON.stringify(svc.classify(t))}`);
+  }
+
+  // 真动作：一个都不能放过（回归用，来自一次子代理审查的 18 条漏判清单）
+  const realActions = [
+    '给所有用户发通知', '发邮件给客户', '把结果推送到群里', '通知一下所有客户',
+    '在群里公布结果', '通知客户的负责人明天上线', '通知客户上线时间改到周五',
+    '通知客户下午三点开会', '通知客户等三个部门', '通知客户下载新版本',
+    '通知客户所在区域的销售', '通知客户内部团队改配置', '通知客户中风险变更已合并',
+    '发送报告给客户', '发送结果给用户', '发送清单给用户', '发送截图给甲方',
+    '发送内容给客户', '推送记录给客户', '发送配置给客户',
+    '发送报告给客户，并且通知所有用户',
+  ];
+  for (const t of realActions) {
+    assert.ok(
+      svc.classify(t).includes('outbound_message'),
+      `漏判（对外发消息）：${t} → ${JSON.stringify(svc.classify(t))}`,
+    );
+  }
+  // 其它类别的裸语义命中同样不能被这条判据误伤（它们没有关键词旁路兜底）
+  assert.ok(svc.classify('更换证书等敏感材料').includes('secret_rotate'), '漏判（轮换密钥）：更换证书等敏感材料');
+  assert.ok(svc.classify('放开权限中的写入限制').includes('permissions'), '漏判（改权限）：放开权限中的写入限制');
+});
+
 test('SEMANTIC_RULES 覆盖七类必问清单', () => {
   const byId = new Map(SEMANTIC_RULES.map((r) => [r.id, r.patterns]));
   for (const cat of ['delete_data', 'stop_service', 'spend_money', 'outbound_message', 'product_direction', 'secret_rotate', 'permissions']) {

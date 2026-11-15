@@ -148,6 +148,21 @@ export class Hub {
       await this.#deliverResult(task);
     } else if (task.status === 'failed') {
       this.events.updateEventStatus(task.event_id, EVENT_STATUS.FAILED, { task: taskId, error: task.error });
+      const envelope = task.meta?.envelope || {};
+      const isFeishuReply = envelope.source === 'feishu';
+      const replyChatId = isFeishuReply ? (task.meta?.payload?.chat_id || null) : null;
+      // 提问失败也要回话：否则人只看到「任务失败」的台账记录，不知道为什么
+      if (isFeishuReply) {
+        await this.notifier.notify({
+          level: 'P1',
+          kind: 'feishu_reply',
+          title: `没做成：${task.title || taskId}`,
+          body: `任务 ${taskId} 失败了。\n\n错误：${(task.error || '未知错误').slice(0, 800)}\n\n可以在面板「任务」页看完整日志，或直接再问一次。`,
+          ref: taskId,
+          dedupeRef: `task_failed:${taskId}`,
+          chatId: replyChatId,
+        });
+      }
       const ask = this.approvals.classify(`${task.title} ${task.error || ''}`);
       if (ask.length) {
         await this.approvals.create({
@@ -160,13 +175,16 @@ export class Hub {
     } else if (task.status === 'dead_letter') {
       this.events.updateEventStatus(task.event_id, EVENT_STATUS.DEAD_LETTER, { task: taskId, error: task.error });
       this.log.error('任务进入死信', { task: taskId, error: task.error });
+      const envelope = task.meta?.envelope || {};
+      const isFeishuReply = envelope.source === 'feishu';
       await this.notifier.notify({
         level: 'P1',
-        kind: 'dead_letter',
+        kind: isFeishuReply ? 'feishu_reply' : 'dead_letter',
         title: `任务死信：${task.title}`,
         body: `任务 ${taskId} 重试 ${task.attempts} 次仍失败，已进死信。\n错误：${(task.error || '').slice(0, 500)}`,
         ref: taskId,
         dedupeRef: `dead_letter:${taskId}`,
+        chatId: isFeishuReply ? (task.meta?.payload?.chat_id || null) : null,
       });
     }
     return task;
@@ -271,7 +289,14 @@ export class Hub {
    * P0/P1 立即推送。产出全文同时归档进报告库，推送里只放摘要 + 报告号。
    */
   async #deliverResult(task) {
-    if (task.meta?.silent !== false) return;          // 静默任务：只写台账
+    // 飞书消息是「有人问我话」，产出是回答，不是系统主动打扰。
+    // 回答必须回到提问的那个会话 —— 否则人在群里问了「现在的工作状态」，
+    // 看见任务跑完，却永远等不到答案（silent:true 会直接把回答吞掉）。
+    const envelope = task.meta?.envelope || {};
+    const isFeishuReply = envelope.source === 'feishu';
+    const replyChatId = isFeishuReply ? (task.meta?.payload?.chat_id || null) : null;
+
+    if (task.meta?.silent !== false && !isFeishuReply) return;  // 静默任务：只写台账
     const text = task.result?.text || '';
     if (!text.trim()) return;
 
@@ -292,13 +317,14 @@ export class Hub {
     const digestBlock = isAggregator ? this.#renderDigest() : '';
     await this.notifier.notify({
       level: isAggregator ? 'P1' : level,
-      kind: 'task_result',
+      kind: isFeishuReply ? 'feishu_reply' : 'task_result',
       title: task.title || `任务完成：${task.task_id}`,
       body: `${text.slice(0, 1500)}${footer}${digestBlock}`,
       ref: task.task_id,
       dedupeRef: `task_result:${task.task_id}`,
+      chatId: replyChatId,
     });
-    this.log.info('任务产出已推送', { task: task.task_id, level, report: report.report_id });
+    this.log.info('任务产出已推送', { task: task.task_id, level, report: report.report_id, reply: isFeishuReply });
   }
 
   /**

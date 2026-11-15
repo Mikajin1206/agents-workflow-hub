@@ -328,10 +328,14 @@ export class Notifier {
    * dedupeRef：同一个 dedupeRef 只推一次。没有它，任务重试、事件重投、
    * 巡检每轮都喊一遍，人会很快学会无视这些提醒 —— 那比不发更糟。
    */
-  async notify({ level = 'P2', kind = 'info', title = '', body = '', ref = null, dedupeRef = null, card = null }) {
+  async notify({ level = 'P2', kind = 'info', title = '', body = '', ref = null, dedupeRef = null, card = null, chatId = null }) {
     const lvl = String(level).toUpperCase();
     const id = newNotificationId();
     const now = nowIso();
+    // 传了 chatId 说明这是在「回复某个人的提问」，不是系统主动通知人。
+    // 主动性通知才该分层（P2 攒到战报、P3 只归档）；回复必须立刻回到提问的会话，
+    // 否则人问了话、看见「任务完成」，然后永远等不到答案。
+    const isReply = Boolean(chatId);
 
     if (dedupeRef) {
       const seen = this.ledger.get(
@@ -345,7 +349,7 @@ export class Notifier {
     }
     const metaCol = dedupeRef ? JSON.stringify({ dedupe_ref: dedupeRef }) : null;
 
-    if (lvl === 'P2') {
+    if (lvl === 'P2' && !isReply) {
       this.dailyQueue.push({ id, title, body, ref, at: now });
       this.ledger.run(
         `INSERT INTO notifications(notification_id,level,kind,title,body,target,channel,status,created_at,ref,meta)
@@ -356,7 +360,7 @@ export class Notifier {
       return { ok: true, channel: 'digest', id };
     }
 
-    if (lvl === 'P3') {
+    if (lvl === 'P3' && !isReply) {
       this.ledger.run(
         `INSERT INTO notifications(notification_id,level,kind,title,body,target,channel,status,created_at,sent_at,ref,meta)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -386,7 +390,7 @@ export class Notifier {
             options: card.options || ['agree', 'reject', 'revise'],
           });
         } else {
-          await this.feishu.sendMessage({ title, body, level: lvl });
+          await this.feishu.sendMessage({ title, body, level: lvl, chatId: chatId || undefined });
         }
         channel = 'feishu';
       } catch (err) {
@@ -396,7 +400,7 @@ export class Notifier {
         // 卡片失败再补一条文本，保证批红入口至少有一条能到
         if (card?.approvalId) {
           try {
-            await this.feishu.sendMessage({ title, body, level: lvl });
+            await this.feishu.sendMessage({ title, body, level: lvl, chatId: chatId || undefined });
             error = `${err.message}（已降级为文本推送）`;
           } catch { /* 降级也失败就只留错误 */ }
         }
@@ -579,6 +583,43 @@ function negatedBefore(hay, index) {
   return false;
 }
 
+/**
+ * 「动词只是名词的定语」判据 —— 判断一个命中是「要做某事」还是「在说某个事物」。
+ *
+ * 实测误判：飞书回复里写「端到端结果需查看飞书发送回执或群内实际消息」，
+ * 被 outbound_message 的「(发送|…){0,14}(客户|用户|群|…)」命中成「发送回执或群」，
+ * 于是又推了一张「对外发消息」的批红卡 —— 而这句话只是在说「去看回执」。
+ *
+ * 第一版判据只看命中之后紧邻的那一个字（方位词表），结果把真动作也放过了：
+ * 「通知客户的负责人」「通知客户等三个部门」「发送报告给客户」全被判成不是动作。
+ * 白名单漏判比多推一张卡严重得多，所以判据必须收得很窄、只认一种形态：
+ *
+ *   动词 + 内容名词      且   名词后面没有投递目标
+ *
+ * 「发送回执」        → 回执后什么都没剩/跟的是并列 → 名词短语，不是动作
+ * 「发送回执给客户」  → 名词后跟「给」= 有投递目标     → 是动作
+ * 「发送报告给客户」  → 同上，是动作（第一版在这里漏了）
+ * 「通知客户的负责人」→ 「客户」不是内容名词          → 是动作（第一版在这里漏了）
+ */
+const ACTION_VERB_HEADS = ['发送', '推送', '通知', '回复', '群发', '公布', '公告', '宣布', '发', '说'];
+const CONTENT_NOUNS = ['回执', '记录', '日志', '结果', '状态', '历史', '列表', '详情', '报告', '内容', '截图', '清单'];
+/** 投递目标标记：出现这些字说明名词只是宾语，后面才是「发给谁」——那是真动作 */
+const TARGET_MARKERS = ['给', '到', '向', '至', '于', '为', '往', '跟'];
+
+function notAnAction(hay, index, text) {
+  const t = String(text || '');
+  const verb = ACTION_VERB_HEADS.find((v) => t.startsWith(v) && t.length > v.length);
+  if (!verb) return false;
+  const rest = t.slice(verb.length);
+  const noun = CONTENT_NOUNS.find((n) => rest.startsWith(n));
+  if (!noun) return false;
+  const after = rest.slice(noun.length);
+  // 名词后面还有投递目标 → 这是真动作，不能放过
+  if (TARGET_MARKERS.some((m) => after.includes(m))) return false;
+  // 名词后面空了，只剩并列/标点 → 「发送回执」「推送记录或日志」这类名词短语
+  return true;
+}
+
 /** 单个关键词匹配：支持英文边界，中文按包含 */
 function matchKeyword(hay, keyword) {
   const k = String(keyword || '').toLowerCase().trim();
@@ -620,11 +661,11 @@ function semanticHit(categoryId, hay) {
     const gre = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
     let m;
     while ((m = gre.exec(hay)) !== null) {
-      if (!negatedBefore(hay, m.index)) return true;
+      if (!negatedBefore(hay, m.index) && !notAnAction(hay, m.index, m[0])) return true;
       if (m.index === gre.lastIndex) gre.lastIndex += 1; // 防空匹配死循环
     }
   }
   return false;
 }
 
-export { APPROVAL_TRANSITIONS, matchKeyword, SEMANTIC_RULES };
+export { APPROVAL_TRANSITIONS, matchKeyword, notAnAction, SEMANTIC_RULES };
