@@ -184,9 +184,11 @@
       "silent": true,
       "schedule": {
         "cron": "0 18 * * *",
-        "name": "仓库巡检",
+        "name": "每日 18:00 仓库巡检",
         "priority": "P3"
-      }
+      },
+      "enabled": true,
+      "action": "dispatch"
     },
     {
       "id": "r08-weekly-report",

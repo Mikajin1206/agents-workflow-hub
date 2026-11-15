@@ -17,6 +17,10 @@ const state = {
   skills: [],
   timers: [],
   nodes: [],
+  /* 运行时长走本地时钟：每 8 秒一次的快照会让数字停住不动，
+     看起来像坏了。这里只记服务端给的那一刻，之后自己每秒往上走。 */
+  uptimeAt: 0,
+  uptimeBase: null,
 };
 
 /* ─────────────── 小工具 ─────────────── */
@@ -194,11 +198,21 @@ function bindRows(container, rows, onRow) {
 
 /* ═══════════════ 数据加载 ═══════════════ */
 
+/** 用服务端快照做基准，本地每秒补差值 —— 快照之间数字也在走 */
+function paintUptime() {
+  const el = $('#uptime');
+  if (!el || state.uptimeBase == null) return;
+  const drift = Math.max(0, (Date.now() - state.uptimeAt) / 1000);
+  el.textContent = dur(state.uptimeBase + drift);
+}
+
 async function loadSnapshot() {
   const snap = await api('/api/snapshot');
   state.snapshot = snap;
   $('#hubname').textContent = 'hub';
-  $('#uptime').textContent = dur(snap.hub.uptime_seconds);
+  state.uptimeBase = snap.hub.uptime_seconds;
+  state.uptimeAt = Date.now();
+  paintUptime();
   $('#m-rules').textContent = snap.hub.rules;
   $('#m-skills').textContent = (snap.hub.skills || []).length;
   $('#m-feishu').textContent = snap.hub.feishu?.enabled ? '已配' : '本地';
@@ -1400,3 +1414,4 @@ const initial = (location.hash || '').replace('#', '');
 if (initial && $(`#view-${initial}`)) switchView(initial);
 loadAll();
 setInterval(() => { if (!document.hidden) loadAll(); }, 8000);
+setInterval(paintUptime, 1000);
