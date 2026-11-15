@@ -1,0 +1,93 @@
+{
+  "$comment": "配置模板。复制为 config/hub.config.json 后再改（hub.config.json 已被 .gitignore 忽略，真实密钥不会进版本库）。改完重启生效。敏感值也可以用环境变量覆盖：HUB_PORT / HUB_HOST / HUB_LOG_LEVEL。",
+  "hub": {
+    "name": "agents-workflow-hub",
+    "host": "127.0.0.1",
+    "port": 8787,
+    "leaseWaitSeconds": 50,
+    "heartbeatSeconds": 10,
+    "resultTimeoutSeconds": 1800,
+    "secret": ""
+  },
+  "ledger": {
+    "dbPath": "data/hub.db",
+    "dedupeWindowSeconds": 300
+  },
+  "limits": {
+    "globalMaxParallel": 3,
+    "attempts": 2,
+    "retryBackoffSeconds": 20,
+    "starvedSeconds": 180
+  },
+  "engines": {
+    "_comment": "codexSandbox: 'bypass'（默认）| 'native'；claudePermissionMode: 'bypassPermissions'（默认，能真干活）| 'acceptEdits'（只自动接受编辑，跑命令仍会被拒）| 'plan'（只读）",
+    "codexSandbox": "bypass",
+    "codexTimeoutSeconds": 900,
+    "claudePermissionMode": "bypassPermissions"
+  },
+  "nodes": [
+    {
+      "id": "win-a",
+      "label": "Windows 主机（7×24）",
+      "engines": [
+        "claude-code",
+        "codex",
+        "mock"
+      ]
+    },
+    {
+      "id": "mac-b",
+      "label": "Mac 笔记本（人机终端）",
+      "engines": [
+        "claude-code",
+        "codex",
+        "mock"
+      ]
+    }
+  ],
+  "approvals": {
+    "reminderHours": 24,
+    "maxRevisions": 3,
+    "defaultAction": "hold"
+  },
+  "feishu": {
+    "$comment": "接入飞书：scripts/feishu-setup.mjs --app-id cli_xxx --app-secret yyy，或在下面填真实值。appId/appSecret 在飞书开放平台「凭证与基础信息」页。",
+    "enabled": false,
+    "appId": "",
+    "appSecret": "",
+    "chatId": "",
+    "verificationToken": "",
+    "encryptKey": ""
+  },
+  "github": {
+    "webhookSecret": "",
+    "allowedRepos": [],
+    "$allowedRepos_comment": "接真实仓库时把 owner/name 填进来，否则 GitHub webhook 会被 403 拒掉。示例：[\"your-name/your-repo\"]"
+  },
+  "pipeline": {
+    "$comment": "mode: 'mock' 五步全模拟（演练用）| 'real' 真跑 | 'auto' 有 git 就走真实步骤。autoStart=false 时不会自动进流水线。releaseCommand/verifyCommand 必须换成你自己项目的真实命令再开 autoStart，否则④⑤会如实报「未配置」。reviewerEngine 可显式指定审查引擎（默认自动换一个可用的、且不等于主引擎）。",
+    "mode": "mock",
+    "autoStart": false,
+    "reviewerEngine": "",
+    "releaseCommand": "npm run build",
+    "verifyCommand": "",
+    "expectedVersion": "",
+    "$defaultWorkdir_comment": "④发布、⑤核实、②检查都在这个目录里跑。不配就沿用触发时传的 workdir（通常是 /api/pipeline 的 workdir 参数）。",
+    "defaultWorkdir": ""
+  },
+  "panel": {
+    "enabled": true,
+    "title": "本地自动化 Agent 体系"
+  },
+  "cron": {
+    "enabled": true
+  },
+  "logging": {
+    "level": "info",
+    "dir": "data/logs"
+  },
+  "monitor": {
+    "$comment": "监控 webhook 共享密钥。空=不校验（绑 127.0.0.1 够用）；改成局域网地址必须填。",
+    "sharedSecret": ""
+  }
+}

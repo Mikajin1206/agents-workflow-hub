@@ -1,0 +1,334 @@
+{
+  "$comment": "规则库（方案 §8.3 种子规则 10 条）。改这个文件不用重启，中台按 mtime 热重载。match 支持 * 通配、/正则/、精确值；schedule 有值即自动生成定时器；action=notify 表示不派活、直接推到人面前。",
+  "version": 1,
+  "rules": [
+    {
+      "id": "r01-daily-report",
+      "title": "每日 07:30 战报",
+      "order": 10,
+      "priority": "P2",
+      "match": {
+        "source": "cron",
+        "type": "cron.daily-report"
+      },
+      "route": {
+        "node": "win-a",
+        "engine": "codex",
+        "model": "terra"
+      },
+      "skill": "daily-report",
+      "prompt": "汇总过去 24 小时：事件数、任务完成/失败、待批红、异常项。产出一份可直接发给人看的中文战报。",
+      "limits": {
+        "per_key": 1,
+        "max_parallel": 1,
+        "attempts": 1,
+        "timeout_seconds": 600
+      },
+      "approval": false,
+      "silent": false,
+      "schedule": {
+        "cron": "30 7 * * *",
+        "name": "每日 07:30 战报",
+        "priority": "P2"
+      },
+      "enabled": true,
+      "action": "dispatch"
+    },
+    {
+      "id": "r02-monitor-alert",
+      "title": "监控告警处理",
+      "order": 20,
+      "priority": "P1",
+      "match": {
+        "source": "monitor",
+        "type": "monitor.alert"
+      },
+      "route": {
+        "node": "win-a",
+        "engine": "codex",
+        "model": "sol"
+      },
+      "skill": "monitor-alert",
+      "prompt": "先判断这是真告警还是噪音：查相关服务状态、最近日志、最近一次部署。给出结论与处置建议；如果处置涉及必问清单，停下来写「需要批红」。",
+      "limits": {
+        "per_key": 1,
+        "max_parallel": 2,
+        "attempts": 2,
+        "timeout_seconds": 900
+      },
+      "approval": false,
+      "silent": true
+    },
+    {
+      "id": "r03-github-issue",
+      "title": "GitHub Issue 自动修",
+      "order": 30,
+      "priority": "P2",
+      "match": {
+        "source": "github",
+        "type": "github.issue"
+      },
+      "route": {
+        "node": "win-a",
+        "engine": "claude-code"
+      },
+      "skill": "repo-fix",
+      "prompt": "针对这个 issue：先复现，再定位，再修，最后补一条能防回归的测试。止步于开 PR，不要合并。",
+      "limits": {
+        "per_key": 1,
+        "max_parallel": 3,
+        "attempts": 2,
+        "timeout_seconds": 1800
+      },
+      "approval": false,
+      "silent": true
+    },
+    {
+      "id": "r04-github-pr-follow",
+      "title": "PR 后续动作（同步/关闭）",
+      "order": 35,
+      "priority": "P3",
+      "match": {
+        "source": "github",
+        "type": "github.pull_request"
+      },
+      "route": {
+        "node": "win-a",
+        "engine": "codex"
+      },
+      "skill": null,
+      "prompt": "记录这次 PR 状态变化，检查是否符合止步 PR 的规矩，不需要改动代码。",
+      "limits": {
+        "per_key": 1,
+        "max_parallel": 2,
+        "attempts": 1,
+        "timeout_seconds": 300
+      },
+      "approval": false,
+      "silent": true
+    },
+    {
+      "id": "r05-manual-dev",
+      "title": "手动开发任务",
+      "order": 40,
+      "priority": "P2",
+      "match": {
+        "source": "*",
+        "type": "cmd.manual",
+        "payload": {
+          "kind": "dev"
+        }
+      },
+      "route": {
+        "node": "win-a",
+        "engine": "claude-code"
+      },
+      "skill": "repo-dev",
+      "prompt": "按上面的需求做实现，止步于开 PR。",
+      "limits": {
+        "per_key": 0,
+        "max_parallel": 1,
+        "attempts": 2,
+        "timeout_seconds": 3600
+      },
+      "approval": false,
+      "silent": true
+    },
+    {
+      "id": "r06-manual-query",
+      "title": "手动查询任务",
+      "order": 50,
+      "priority": "P3",
+      "match": {
+        "source": "*",
+        "type": "cmd.manual"
+      },
+      "route": {
+        "node": "any",
+        "engine": "codex"
+      },
+      "skill": "quick-query",
+      "prompt": "回答这个问题，最多三段话，不要展开成文档。",
+      "limits": {
+        "per_key": 0,
+        "max_parallel": 2,
+        "attempts": 1,
+        "timeout_seconds": 300
+      },
+      "approval": false,
+      "silent": true
+    },
+    {
+      "id": "r07-repo-sweep",
+      "title": "每日 18:00 仓库巡检",
+      "order": 60,
+      "priority": "P3",
+      "match": {
+        "source": "cron",
+        "type": "cron.repo-sweep"
+      },
+      "route": {
+        "node": "win-a",
+        "engine": "codex",
+        "model": "sol"
+      },
+      "skill": "repo-sweep",
+      "prompt": "巡检：未提交改动、开着的 PR 是否卡住、依赖是否有高危漏洞、CI 是否长期红。只报告，不改代码。",
+      "limits": {
+        "per_key": 1,
+        "max_parallel": 1,
+        "attempts": 1,
+        "timeout_seconds": 900
+      },
+      "approval": false,
+      "silent": true,
+      "schedule": {
+        "cron": "0 18 * * *",
+        "name": "每日 18:00 仓库巡检",
+        "priority": "P3"
+      },
+      "enabled": true,
+      "action": "dispatch"
+    },
+    {
+      "id": "r08-weekly-report",
+      "title": "周日 20:00 周报",
+      "order": 70,
+      "priority": "P2",
+      "match": {
+        "source": "cron",
+        "type": "cron.weekly-report"
+      },
+      "route": {
+        "node": "win-a",
+        "engine": "claude-code"
+      },
+      "skill": "weekly-report",
+      "prompt": "汇总本周：完成了什么、卡在哪、下周建议做什么。给结论，不要罗列流水账。",
+      "limits": {
+        "per_key": 1,
+        "max_parallel": 1,
+        "attempts": 1,
+        "timeout_seconds": 900
+      },
+      "approval": false,
+      "silent": false,
+      "schedule": {
+        "cron": "0 20 * * 0",
+        "name": "周报",
+        "priority": "P2"
+      }
+    },
+    {
+      "id": "r09-cleanup",
+      "title": "周日大扫除（含删数据，必须批红）",
+      "order": 80,
+      "priority": "P2",
+      "match": {
+        "source": "cron",
+        "type": "cron.cleanup"
+      },
+      "route": {
+        "node": "any",
+        "engine": "claude-code"
+      },
+      "skill": "cleanup",
+      "prompt": "清理僵尸分支、过期日志、失效的 skill 与决定记忆。删除任何东西之前必须先票拟。",
+      "limits": {
+        "per_key": 1,
+        "max_parallel": 1,
+        "attempts": 1,
+        "timeout_seconds": 900
+      },
+      "approval": "always",
+      "silent": false,
+      "schedule": {
+        "cron": "0 21 * * 0",
+        "name": "周日大扫除",
+        "priority": "P2"
+      }
+    },
+    {
+      "id": "r10-review-stalled",
+      "title": "审查卡住 → 直接推人（P1）",
+      "order": 90,
+      "priority": "P1",
+      "match": {
+        "source": "*",
+        "type": "review.stalled"
+      },
+      "action": "notify",
+      "notify_level": "P1",
+      "prompt": "审查连续 3 轮未通过，已停下等人工判断。",
+      "approval": true,
+      "silent": false
+    },
+    {
+      "id": "r11-release-failed",
+      "title": "发布失败 → 直接推人（P0）",
+      "order": 100,
+      "priority": "P0",
+      "match": {
+        "source": "*",
+        "type": "release.failed"
+      },
+      "action": "notify",
+      "notify_level": "P0",
+      "prompt": "发布或 CI 失败，线上可能未更新，需要立刻处理。",
+      "approval": true,
+      "silent": false
+    },
+    {
+      "id": "r13-feishu-dev",
+      "title": "飞书消息 dev: 前缀 → 开发任务（止步 PR）",
+      "order": 42,
+      "priority": "P2",
+      "match": {
+        "source": "feishu",
+        "type": "feishu.message",
+        "payload": {
+          "dev": true
+        }
+      },
+      "route": {
+        "node": "win-a",
+        "engine": "claude-code",
+        "workdir": "D:\\Agents Workflow\\work\\ccswitch-connect-workbuddy"
+      },
+      "skill": "repo-dev",
+      "prompt": "群里有人用「dev:」发来了开发任务，payload.text 是去掉前缀后的需求。目标仓库 D:\\Agents Workflow\\work\\ccswitch-connect-workbuddy（GitHub Mikajin1206/ccswitch-connect-workbuddy）。按需求实现：改动前先 npm run typecheck 确认基线是绿的，改完必须 typecheck + build 都过，然后提交并开 PR。止步于开 PR。",
+      "limits": {
+        "per_key": 0,
+        "max_parallel": 1,
+        "attempts": 2,
+        "timeout_seconds": 3600
+      },
+      "approval": false,
+      "silent": false
+    },
+    {
+      "id": "r14-feishu-query",
+      "title": "飞书普通消息 → 查询/操作（codex）",
+      "order": 43,
+      "priority": "P3",
+      "match": {
+        "source": "feishu",
+        "type": "feishu.message"
+      },
+      "route": {
+        "node": "win-a",
+        "engine": "codex"
+      },
+      "skill": "quick-query",
+      "prompt": "群里有人发来一条消息（payload.text）。如果是问题/查询，直接回答；如果是要本机执行的简单操作，执行后汇报结果；如果其实是开发类需求但没带 dev: 前缀，说明「请在消息前加 dev: 让开发任务走完整流水线」，不要自行改代码。",
+      "limits": {
+        "per_key": 0,
+        "max_parallel": 2,
+        "attempts": 1,
+        "timeout_seconds": 900
+      },
+      "approval": false,
+      "silent": false
+    }
+  ]
+}
