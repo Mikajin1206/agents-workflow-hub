@@ -145,11 +145,19 @@ export function parseFrontMatter(raw) {
 }
 
 /** 组装最终提示词：任务背景 + Skill 正文 + 决定记忆 + 指令模板 */
-export function buildPrompt({ task, skill, decisions, envelope, payload, hubUrl }) {
-  // SOP 里可以用 {{hub}} 占位（"调 GET {{hub}}/api/stats"）。
-  // 不替换的话模型会收到字面 {{hub}}，要么去猜地址、要么直接放弃——
+export function buildPrompt({ task, skill, decisions, envelope, payload, hubUrl, token }) {
+  // SOP 里可以用 {{hub}} / {{token}} 占位（"调 GET {{hub}}/api/stats，带头 x-hub-token: {{token}}"）。
+  // 不替换的话模型会收到字面占位符，要么去猜地址、要么直接放弃——
   // 实测 codex 因此输出了"做不了：无法确认 Hub 地址"。
-  const subst = (s) => (hubUrl ? String(s).replaceAll('{{hub}}', hubUrl) : s);
+  // {{token}} 是中台访问令牌（hub.secret）：中台配了真实密钥后 /api/* 全部 401，
+  // 不注入的话日报这类要调 API 取数的 SOP 会在第一步就死掉（2026-11-17 战报实测）。
+  // 未配密钥（或仍是默认开发值）时调用方传空，占位保持原样——无密钥模式接口本就不设防。
+  const subst = (s) => {
+    let out = String(s);
+    if (hubUrl) out = out.replaceAll('{{hub}}', hubUrl);
+    if (token) out = out.replaceAll('{{token}}', token);
+    return out;
+  };
   const parts = [];
   parts.push('## 任务');
   parts.push(`- 标题：${task.title || '(无)'}`);
