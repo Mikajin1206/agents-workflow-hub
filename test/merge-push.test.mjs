@@ -144,6 +144,7 @@ test('飞书任务失败且涉及必问清单：失败回话与批红并一条�
     assert.equal(added.length, 1, `失败回话只推一条，实际 ${added.length} 条：${JSON.stringify(added.map((r) => [r.kind, r.title]))}`);
     assert.equal(added[0].kind, 'approval', '合并推送带批红按钮');
     assert.match(added[0].body, /失败了/, '失败说明在上');
+    assert.match(added[0].body, /原因：（部署阶段要停掉服务重启，中途失败退出）/, '原始报错压成一行、收进括号');
     assert.match(added[0].body, /待批红/, '批红信息在下');
     const ticket = hub.ledger.get('SELECT * FROM approvals WHERE task_id=?', task.task_id);
     assert.ok(ticket, '失败票拟照常落库');
@@ -180,6 +181,24 @@ test('renderReplyMergedText：正文在上、批红信息在下、带操作入�
   assert.ok(head > 0, '存在答复与批红的分隔线');
   assert.ok(merged.indexOf('脚本已修') < head, '答复正文在分隔线之前');
   assert.ok(merged.indexOf('待批红') > head, '批红信息在分隔线之后');
-  assert.match(merged, /apr_t1/, '带票拟编号（CLI 入口）');
+  assert.match(merged, /apr_t1/, '带票拟编号（纯文本降级时也能对上票拟单）');
   assert.match(merged, /批红页/, '带面板操作入口');
+  assert.doesNotMatch(merged, /cli\.mjs/, '不给人看 CLI 命令（2026-11-17 汇报规范）');
+});
+
+test('产出推给人之前过可读化：反引号与星号记号不出现（2026-11-17 汇报规范）', async () => {
+  const { hub, cleanup } = await makeHub('human');
+  try {
+    const { added } = await runFeishuTask(hub, {
+      key: 'human-text', dev: false,
+      resultText: '## 答复\n**已核实**：面板正常，见 `http://127.0.0.1:8787`。\n\n\n\n过程略，详见 `docs/部署运维.md`。',
+    });
+    assert.equal(added.length, 1, `查询答复只推一张反馈卡，实际 ${added.length} 条`);
+    const body = added[0].body;
+    assert.doesNotMatch(body, /`/, '反引号全部换成「」');
+    assert.doesNotMatch(body, /\*\*|## /, '粗体与标题记号去掉');
+    assert.match(body, /「答复」/, '标题行文字保留并加「」');
+    assert.match(body, /已核实：面板正常/, '正文内容原样保留');
+    assert.match(body, /「http:\/\/127\.0\.0\.1:8787」/, '行内代码换成「」');
+  } finally { cleanup(); }
 });

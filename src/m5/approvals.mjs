@@ -3,6 +3,7 @@ import path from 'node:path';
 import { nowIso, addSeconds } from '../lib/config.mjs';
 import { newApprovalId, newNotificationId } from '../lib/ids.mjs';
 import { parseApproval } from '../m2/events.mjs';
+import { forHuman } from '../lib/human-text.mjs';
 
 /**
  * M5 决策反馈层（方案 §7）。
@@ -140,16 +141,18 @@ export class ApprovalService {
       '',
       a.question,
     ];
-    if (a.proposal) lines.push('', `方案：\n${a.proposal}`);
+    // 方案可能引用 worker 的原话（带反引号、星号等排版记号），给人看之前先整理一遍
+    if (a.proposal) lines.push('', `方案：\n${forHuman(a.proposal)}`);
     // 可选按钮跟随票拟单自己的 options：批红卡「批 / 驳 / 改派」，查询反馈卡「已阅 / 采纳 / 驳回 / 改派」
     const labels = (a.options || ['agree', 'reject', 'revise']).map((o) => OPTION_LABELS[o] || o);
     lines.push('', `可选：${labels.join(' / ')}${isQuery ? '' : '（改派请说明要求）'}`);
     // 批红入口写进卡片：手机上收到推送时能直接知道去哪儿操作。
     // 中台绑 127.0.0.1 时面板只在运行中台的那台机器上可达；绑局域网地址则同网手机可开。
+    // 面板地址收进括号；CLI 命令是开发细节，不再写给人看（2026-11-17 汇报规范）。
     const { host, port } = this.config?.hub || {};
     const loopback = !host || host === '127.0.0.1' || host === 'localhost';
     const panelUrl = `http://${loopback ? '127.0.0.1' : host}:${port || 8787}`;
-    lines.push(`操作入口：本地面板 ${panelUrl} → ${isQuery ? '查询反馈' : '批红'}页，或 CLI：node src/cli.mjs approve/reject ${a.approval_id}`);
+    lines.push(`操作入口：打开面板${isQuery ? '查询反馈' : '批红'}页（${panelUrl}）。`);
     lines.push(`编号：${a.approval_id}`, isQuery ? '已阅/驳回只做记录；采纳才会把建议派成任务。' : '超时不会默认同意，只会提醒一次。');
     return lines.join('\n');
   }
@@ -167,12 +170,14 @@ export class ApprovalService {
     const loopback = !host || host === '127.0.0.1' || host === 'localhost';
     const panelUrl = `http://${loopback ? '127.0.0.1' : host}:${port || 8787}`;
     const catLabel = a.meta?.category_label || EXTRA_CATEGORY_LABELS[a.category] || a.category || '事项';
+    // 编号写进正文：纯文本降级（卡片发不出）时没有 note 元素，靠这行对得上票拟单
     return [
       String(answerText || '').trim() || '（无正文）',
       '',
       '──────────────',
       `⏳ 待批红：${a.question || `本答复涉及「${catLabel}」，相关动作已票拟，等待批红。`}`,
-      `操作入口：本地面板 ${panelUrl} → 批红页，或 CLI：node src/cli.mjs approve/reject ${a.approval_id}`,
+      `操作入口：打开面板批红页（${panelUrl}）。`,
+      `编号：${a.approval_id}`,
       '超时不会默认同意，只会提醒一次。',
     ].join('\n');
   }

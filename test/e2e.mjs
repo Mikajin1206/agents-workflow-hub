@@ -418,6 +418,8 @@ async function main() {
   });
   ok(prompt.includes('执行 SOP') && prompt.includes('止步于开 PR'), '提示词里装上 SOP 正文', prompt.slice(0, 80));
   ok(prompt.includes('已定过的事'), '提示词里装上决定记忆', prompt.includes('数据库只增不改'));
+  ok(prompt.includes('第一行写结论') && prompt.includes('需要你确认') && prompt.includes('不复述'),
+    '提示词带上「写给人看」的汇报规范（2026-11-17）');
 
   // 回归：SOP 里的 {{hub}} 必须换成真实地址，否则模型收到字面量会直接放弃
   const promptWithHub = hub.skills.buildPrompt({
