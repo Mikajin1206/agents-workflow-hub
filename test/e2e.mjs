@@ -326,8 +326,8 @@ async function main() {
       payload: { text: '现在的工作状态', chat_id: 'oc_test_chat' },
     }, 'test');
     await new Promise((r) => setTimeout(r, 60));
-    // r14 派给 codex，所以这里要声明 codex 才领得走（只声明 mock 会一直排队）
-    const pulled = await rh.queue.poll({ nodeId: 'win-a', engines: ['codex', 'mock'], waitSeconds: 2 });
+    // r14 现在派给 claude-code（rules.json 已改），这里要把 claude-code 声明上才领得走
+    const pulled = await rh.queue.poll({ nodeId: 'win-a', engines: ['claude-code', 'codex', 'mock'], waitSeconds: 2 });
     if (pulled) {
       rh.queue.complete(pulled.task_id, 'win-a', { ok: true, text: '中台在线，一切正常。', engine: 'mock' });
       await rh.afterTaskUpdate(pulled.task_id);
