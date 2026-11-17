@@ -17,7 +17,7 @@
         "model": "terra"
       },
       "skill": "daily-report",
-      "prompt": "汇总过去 24 小时：事件数、任务完成/失败、待批红、异常项。产出一份可直接发给人看的中文战报。",
+      "prompt": "汇总过去 24 小时：事件数、任务完成/失败、待批红、异常项。产出一份可直接发给人看的中文战报。语言要优美通顺，自然连贯，完整描述，不过度使用简称。",
       "limits": {
         "per_key": 1,
         "max_parallel": 1,
@@ -49,7 +49,7 @@
         "model": "sol"
       },
       "skill": "monitor-alert",
-      "prompt": "先判断这是真告警还是噪音：查相关服务状态、最近日志、最近一次部署。给出结论与处置建议；如果处置涉及必问清单，停下来写「需要批红」。",
+      "prompt": "先判断这是真告警还是噪音：查相关服务状态、最近日志、最近一次部署。给出结论与处置建议；如果处置涉及必问清单，停下来写「需要批红」。语言要优美通顺，自然连贯，完整描述，不过度使用简称。",
       "limits": {
         "per_key": 1,
         "max_parallel": 2,
@@ -57,7 +57,9 @@
         "timeout_seconds": 900
       },
       "approval": false,
-      "silent": true
+      "silent": true,
+      "enabled": true,
+      "action": "dispatch"
     },
     {
       "id": "r03-github-issue",
@@ -96,7 +98,6 @@
         "node": "win-a",
         "engine": "codex"
       },
-      "skill": null,
       "prompt": "记录这次 PR 状态变化，检查是否符合止步 PR 的规矩，不需要改动代码。",
       "limits": {
         "per_key": 1,
@@ -105,7 +106,9 @@
         "timeout_seconds": 300
       },
       "approval": false,
-      "silent": true
+      "silent": true,
+      "enabled": true,
+      "action": "dispatch"
     },
     {
       "id": "r05-manual-dev",
@@ -156,7 +159,9 @@
         "timeout_seconds": 300
       },
       "approval": false,
-      "silent": true
+      "silent": true,
+      "enabled": true,
+      "action": "dispatch"
     },
     {
       "id": "r07-repo-sweep",
@@ -233,7 +238,7 @@
         "engine": "claude-code"
       },
       "skill": "cleanup",
-      "prompt": "清理僵尸分支、过期日志、失效的 skill 与决定记忆。删除任何东西之前必须先票拟。",
+      "prompt": "清理僵尸分支、过期日志、失效的 skill 与决定记忆。删除任何东西之前必须先票拟。推送结果用中文，语言要优美通顺，自然连贯，完整描述，不过度使用简称。",
       "limits": {
         "per_key": 1,
         "max_parallel": 1,
@@ -244,9 +249,11 @@
       "silent": false,
       "schedule": {
         "cron": "0 21 * * 0",
-        "name": "周日大扫除",
+        "name": "周日大扫除（含删数据，必须批红）",
         "priority": "P2"
-      }
+      },
+      "enabled": true,
+      "action": "dispatch"
     },
     {
       "id": "r10-review-stalled",
@@ -260,8 +267,9 @@
       "action": "notify",
       "notify_level": "P1",
       "prompt": "审查连续 3 轮未通过，已停下等人工判断。",
-      "approval": true,
-      "silent": false
+      "approval": "always",
+      "silent": false,
+      "enabled": true
     },
     {
       "id": "r11-release-failed",
@@ -275,8 +283,9 @@
       "action": "notify",
       "notify_level": "P0",
       "prompt": "发布或 CI 失败，线上可能未更新，需要立刻处理。",
-      "approval": true,
-      "silent": false
+      "approval": "always",
+      "silent": false,
+      "enabled": true
     },
     {
       "id": "r13-feishu-dev",
@@ -292,11 +301,10 @@
       },
       "route": {
         "node": "win-a",
-        "engine": "claude-code",
-        "workdir": "D:\\Agents Workflow\\work\\ccswitch-connect-workbuddy"
+        "engine": "claude-code"
       },
       "skill": "repo-dev",
-      "prompt": "群里有人用「dev:」发来了开发任务，payload.text 是去掉前缀后的需求。目标仓库 D:\\Agents Workflow\\work\\ccswitch-connect-workbuddy（GitHub Mikajin1206/ccswitch-connect-workbuddy）。按需求实现：改动前先 npm run typecheck 确认基线是绿的，改完必须 typecheck + build 都过，然后提交并开 PR。止步于开 PR。",
+      "prompt": "老板用「dev:」发来了开发任务，payload.text 是去掉前缀后的需求。目标仓库通过老板指令确定。按需求实现，然后提交并开 PR。止步于开 PR。",
       "limits": {
         "per_key": 0,
         "max_parallel": 1,
@@ -304,11 +312,13 @@
         "timeout_seconds": 3600
       },
       "approval": false,
-      "silent": false
+      "silent": false,
+      "enabled": true,
+      "action": "dispatch"
     },
     {
       "id": "r14-feishu-query",
-      "title": "飞书普通消息 → 查询/操作（codex）",
+      "title": "飞书普通消息 → 查询/操作（claude）",
       "order": 43,
       "priority": "P3",
       "match": {
@@ -317,10 +327,9 @@
       },
       "route": {
         "node": "win-a",
-        "engine": "codex"
+        "engine": "claude-code"
       },
-      "skill": "quick-query",
-      "prompt": "群里有人发来一条消息（payload.text）。如果是问题/查询，直接回答；如果是要本机执行的简单操作，执行后汇报结果；如果其实是开发类需求但没带 dev: 前缀，说明「请在消息前加 dev: 让开发任务走完整流水线」，不要自行改代码。",
+      "prompt": "老板发来消息。如果是问题/查询，直接回答；如果是要本机执行的简单操作，执行后汇报结果；如果其实是开发类需求但没带 dev: 前缀，说明「请在消息前加 dev: 让开发任务走完整流水线」，不要自行改代码。",
       "limits": {
         "per_key": 0,
         "max_parallel": 2,
@@ -328,7 +337,9 @@
         "timeout_seconds": 900
       },
       "approval": false,
-      "silent": false
+      "silent": false,
+      "enabled": true,
+      "action": "dispatch"
     }
   ]
 }
