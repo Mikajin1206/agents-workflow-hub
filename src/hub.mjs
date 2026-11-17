@@ -15,6 +15,7 @@ import { WebhookAdapter } from './m1/webhook-adapter.mjs';
 import { Pipeline, createRunner } from './m4/pipeline.mjs';
 import { listEngines } from './m3/engines.mjs';
 import { newTaskId } from './lib/ids.mjs';
+import { forHuman, errorOneLine } from './lib/human-text.mjs';
 
 /**
  * 中台装配（方案 §4 六模块接线）。
@@ -180,14 +181,24 @@ export class Hub {
       // 命中必问清单时不再「失败通知 + 批红卡」连发两道：票拟只建单不推卡，
       // 批红信息并入失败回话一次推送（2026-11-17 修「dev 双推」）。
       if (isFeishuReply) {
+        // 分类名给人看用中文名（「停服」），不透出分类 ID（stop_service）
+        const catLabels = (id) => this.config.approvals.categories.find((c) => c.id === id)?.label || id;
         const ticket = ask.length ? await this.approvals.create({
           title: `任务失败：${task.title}`,
-          question: `任务 ${taskId} 执行失败，且涉及 ${ask.join('/')}。要重试、改派，还是先搁着？`,
-          proposal: `错误：${(task.error || '').slice(0, 800)}`,
+          question: `执行失败了，而且涉及「${ask.map(catLabels).join('、')}」。要重试、改派，还是先搁着？`,
+          proposal: `原因：${errorOneLine(task.error, 400)}`,
           taskId, eventId: task.event_id, category: ask[0],
           push: false,
         }) : null;
-        const answer = `任务 ${taskId} 失败了。\n\n错误：${(task.error || '未知错误').slice(0, 800)}\n\n可以在面板「任务」页看完整日志，或直接再问一次。`;
+        // 失败回话给人看：一句话说清什么事没做成；原始报错压成一行、收进括号，
+        // 完整记录指到面板，不整段贴堆栈（2026-11-17 汇报规范）
+        const answer = [
+          `任务执行失败了：${task.title || taskId}。`,
+          '',
+          `原因：（${errorOneLine(task.error, 200)}）`,
+          '',
+          '想看完整记录，打开面板「任务」页；也可以直接再问我一次。',
+        ].join('\n');
         if (ticket) {
           const sent = await this.notifier.notify({
             level: 'P1',
@@ -215,8 +226,8 @@ export class Hub {
         // 非飞书来源的失败：票拟照旧单独推卡（默认会话），不存在「双推」问题
         await this.approvals.create({
           title: `任务失败：${task.title}`,
-          question: `任务 ${taskId} 执行失败，且涉及 ${ask.join('/')}。要重试、改派，还是先搁着？`,
-          proposal: `错误：${(task.error || '').slice(0, 800)}`,
+          question: `执行失败了，而且涉及「${ask.map((id) => this.config.approvals.categories.find((c) => c.id === id)?.label || id).join('、')}」。要重试、改派，还是先搁着？`,
+          proposal: `原因：${errorOneLine(task.error, 400)}`,
           taskId, eventId: task.event_id, category: ask[0],
         });
       }
@@ -228,8 +239,8 @@ export class Hub {
       await this.notifier.notify({
         level: 'P1',
         kind: isFeishuReply ? 'feishu_reply' : 'dead_letter',
-        title: `任务死信：${task.title}`,
-        body: `任务 ${taskId} 重试 ${task.attempts} 次仍失败，已进死信。\n错误：${(task.error || '').slice(0, 500)}`,
+        title: `反复失败，已暂停：${task.title}`,
+        body: `这件事重试了 ${task.attempts} 次还是没做成，已暂停等你处理。\n原因：（${errorOneLine(task.error, 200)}）`,
         ref: taskId,
         dedupeRef: `dead_letter:${taskId}`,
         chatId: isFeishuReply ? (task.meta?.payload?.chat_id || null) : null,
@@ -360,6 +371,8 @@ export class Hub {
     if (task.meta?.silent !== false && !isFeishuReply) return;  // 静默任务：只写台账
     const text = task.result?.text || '';
     if (!text.trim()) return;
+    // 归档存原文（可审计），推送给人看的版本过一遍可读化（2026-11-17 汇报规范）
+    const shown = forHuman(text);
 
     const report = this.reports.save({
       kind: 'task_output',
@@ -377,7 +390,7 @@ export class Hub {
       const approval = await this.approvals.create({
         title: task.title || '查询答复',
         question: '查询答复如下，请点按钮反馈（已阅 / 采纳 / 驳回 / 改派）：',
-        proposal: text,
+        proposal: shown,
         eventId: task.event_id,
         category: 'query',
         options: ['ack', 'adopt', 'reject', 'revise'],
@@ -394,12 +407,12 @@ export class Hub {
     // 票拟单已在 #maybeEscalate 建好（push:false），这里只补一次合并推送，
     // 不再「票拟卡 + 答复文本」连发两道（2026-11-17 修「dev 双推」）。
     if (isFeishuReply && escalated) {
-      const footer = text.length > 1800 ? `\n…（全文见报告库 ${report.report_id}）` : '';
+      const footer = shown.length > 1800 ? `\n…（内容过长有删节，全文已存档，存档号 ${report.report_id}）` : '';
       const sent = await this.notifier.notify({
         level: 'P1',
         kind: 'approval',
         title: `【待批红·${escalated.meta?.category_label || escalated.category}】${task.title || '答复'}`,
-        body: this.approvals.renderReplyMergedText(escalated, `${text.slice(0, 1800)}${footer}`),
+        body: this.approvals.renderReplyMergedText(escalated, `${shown.slice(0, 1800)}${footer}`),
         ref: { approval_id: escalated.approval_id, task_id: task.task_id, event_id: task.event_id },
         dedupeRef: `task_result:${task.task_id}`,
         card: { approvalId: escalated.approval_id, options: escalated.options || ['agree', 'reject', 'revise'] },
@@ -413,7 +426,7 @@ export class Hub {
     }
 
     const level = task.priority || 'P2';
-    const footer = text.length > 1500 ? `\n…（全文见报告库 ${report.report_id}）` : '';
+    const footer = shown.length > 1500 ? `\n…（内容过长有删节，全文已存档，存档号 ${report.report_id}）` : '';
     // 战报/周报就是聚合出口本身：它不能再进自己的聚合队列，否则 07:30
     // 跑完的战报只是「攒起来等下一条战报带出去」，永远没人看到。
     // 所以聚合任务的产出按 P1 立即送出，并把攒下的 P2 一并带上。
@@ -423,7 +436,7 @@ export class Hub {
       level: isAggregator ? 'P1' : level,
       kind: isFeishuReply ? 'feishu_reply' : 'task_result',
       title: task.title || `任务完成：${task.task_id}`,
-      body: `${text.slice(0, 1500)}${footer}${digestBlock}`,
+      body: `${shown.slice(0, 1500)}${footer}${digestBlock}`,
       ref: task.task_id,
       dedupeRef: `task_result:${task.task_id}`,
       chatId: replyChatId,
@@ -442,7 +455,7 @@ export class Hub {
     if (items.length > 30) lines.push(`· …另有 ${items.length - 30} 条`);
     this.notifier.markDigestSent(items.map((i) => i.id));
     this.log.info('聚合队列已随战报发出', { count: items.length });
-    return `\n\n【其间攒下的 ${items.length} 条常规通知】\n${lines.join('\n')}`;
+    return `\n\n【这期间顺带办结的 ${items.length} 条】\n${lines.join('\n')}`;
   }
 
   /** 手动/定时派活（不经规则，直接指定引擎，用于面板与 CLI） */

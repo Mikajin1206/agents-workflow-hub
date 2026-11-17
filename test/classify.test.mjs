@@ -227,4 +227,6 @@ test('renderCardText 的「可选」行跟随票拟单 options', () => {
   });
   assert.match(approvalCard, /批 \/ 驳回 \/ 改派/);
   assert.match(approvalCard, /超时不会默认同意/);
+  assert.doesNotMatch(approvalCard, /cli\.mjs/, '卡片正文不给人看 CLI 命令');
+  assert.match(approvalCard, /编号：apa1/, '票拟编号单独一行，纯文本降级也能对上');
 });
