@@ -101,6 +101,7 @@ async function handleTask({ le, hubUrl, nodeId, cfg, log, skills, decisions }) {
       envelope: task.meta?.envelope,
       payload: task.meta?.payload,
       hubUrl,
+      token: hubTokenValue(),
     });
 
     const workdir = resolveWorkdir(task.workdir, cfg);
@@ -183,10 +184,16 @@ async function postJson(url, body, log) {
 // 中台设了访问密钥（hub.secret）后，节点必须带同一个令牌才能领活。
 // 令牌来源：config/hub.config.json 的 hub.secret（worker 和中台读同一份配置，
 // 重启即生效）；环境变量 HUB_TOKEN 可覆盖 —— 本地无密钥模式照常工作。
+// 同一个值也喂给 buildPrompt 注入 {{token}} 占位，让日报这类 SOP 能带着
+// 令牌调中台 API（默认开发值不注入，避免把假令牌写进提示词）。
 let TOKEN_CACHE = '';
-function authHeaders() {
+function hubTokenValue() {
   const token = TOKEN_CACHE || process.env.HUB_TOKEN || '';
-  return token && token !== 'local-dev-secret-change-me' ? { 'x-hub-token': token } : {};
+  return token && token !== 'local-dev-secret-change-me' ? token : '';
+}
+function authHeaders() {
+  const token = hubTokenValue();
+  return token ? { 'x-hub-token': token } : {};
 }
 
 async function fetchWithRetry(url, init, log, attempt = 0) {

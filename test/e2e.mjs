@@ -431,6 +431,30 @@ async function main() {
   ok(!promptWithHub.includes('{{hub}}'), 'SOP 里的 {{hub}} 占位被替换掉');
   ok(promptWithHub.includes('http://127.0.0.1:8787/api/stats'), '替换成真实中台地址', promptWithHub.slice(0, 120));
 
+  // 回归：中台配了真实 hub.secret 后 /api/* 全部 401，SOP 里的 {{token}}
+  // 必须换成真实令牌，否则日报在取数第一步就死（2026-11-17 战报实测三个接口全 401）
+  const promptWithToken = hub.skills.buildPrompt({
+    task: { title: '出日报', prompt: '汇总一下' },
+    skill: { name: 'daily-report', meta: { title: '每日战报' }, body: '带头 x-hub-token: {{token}} 调 {{hub}}/api/stats' },
+    decisions: [],
+    envelope: { type: 'cron.daily-report', priority: 'P2' },
+    payload: {},
+    hubUrl: 'http://127.0.0.1:8787',
+    token: 'e2e-test-token',
+  });
+  ok(!promptWithToken.includes('{{token}}'), 'SOP 里的 {{token}} 占位被替换掉');
+  ok(promptWithToken.includes('x-hub-token: e2e-test-token'), '替换成真实访问令牌', promptWithToken.slice(0, 120));
+  // 未配令牌（调用方传空）时保持字面量，不注入空值或默认开发值
+  const promptNoToken = hub.skills.buildPrompt({
+    task: { title: '出日报', prompt: '汇总一下' },
+    skill: { name: 'daily-report', meta: { title: '每日战报' }, body: '带头 x-hub-token: {{token}} 调 {{hub}}/api/stats' },
+    decisions: [],
+    envelope: { type: 'cron.daily-report', priority: 'P2' },
+    payload: {},
+    hubUrl: 'http://127.0.0.1:8787',
+  });
+  ok(promptNoToken.includes('{{token}}'), '未配令牌时 {{token}} 保持原样不注入');
+
   /* ─────────── 10. 报告归档 ─────────── */
   section('M6 报告归档');
   const saved = hub.reports.save({ kind: 'daily', title: '每日战报 2026-11-14', body: '# 战报\n\n一切正常。' });
