@@ -98,6 +98,29 @@ export class Hub {
     // 批红通过后任务回 queued，立刻唤醒长轮询里的节点（否则最多干等 50 秒）
     this.approvals.onApproved = () => this.queue.wakeAll();
 
+    // 查询反馈被「采纳」：把答复里的执行建议派成新任务去执行（2026-11-17 分类口径）。
+    // 铁律不变——任务照常受必问清单与止步 PR 约束，采纳只是替老板点了个「开工」。
+    this.approvals.onAdopt = async ({ approval, by }) => {
+      const res = await this.dispatchManual({
+        type: 'cmd.manual',
+        source: 'adopt',
+        summary: `采纳执行：${approval.title}`,
+        priority: 'P1',
+        node: 'win-a',
+        engine: 'claude-code',
+        prompt: [
+          `老板已采纳一条查询答复里的执行建议，请按建议执行。`,
+          `原查询：${approval.title}`,
+          '',
+          approval.proposal || approval.question || '',
+          '',
+          '铁律照旧：不询问不等待；代码类止步于提交 + 开 PR；碰到必问清单（删数据/停服/花钱/对外发消息/改方向/密钥/权限）停下来写「需要批红」。',
+        ].join('\n'),
+      });
+      this.log.info('已采纳查询建议，派后续任务', { approval: approval.approval_id, task: res.task_id, by });
+      return res;
+    };
+
     this.startedAt = nowIso();
   }
 
@@ -258,6 +281,10 @@ export class Hub {
 
   /** 产出里出现必问清单动作 → 必须票拟 */
   async #maybeEscalate(task, event) {
+    // 查询任务的产出只是「建议」，没有在执行任何东西；执行入口是反馈卡上的
+    // 「采纳」（采纳后派的新任务会正常走这道 escalate）。在这里再推一张
+    // 「是否准予继续执行」的批红卡，是对同一段文字的双重打扰。
+    if (task.skill === 'query') return;
     const hits = this.approvals.classify(`${task.result?.text || ''}`);
     if (!hits.length) return;
     // 只有没有「还在拦着」的票拟时才建新单：
@@ -308,6 +335,26 @@ export class Hub {
       eventId: task.event_id,
       meta: { engine: task.engine, node: task.node, skill: task.skill },
     });
+
+    // 「查询」分类（2026-11-17 口径）：答复不直接回文本，而是转成反馈卡——
+    // 问题理解/问题分析/执行建议 + 已阅/采纳/驳回/改派四个按钮。
+    // 采纳才会真正执行建议；已阅/驳回只做记录。
+    if (isFeishuReply && task.skill === 'query') {
+      const approval = await this.approvals.create({
+        title: task.title || '查询答复',
+        question: '查询答复如下，请点按钮反馈（已阅 / 采纳 / 驳回 / 改派）：',
+        proposal: text,
+        eventId: task.event_id,
+        category: 'query',
+        options: ['ack', 'adopt', 'reject', 'revise'],
+        chatId: replyChatId,
+        requestedBy: `task:${task.task_id}`,
+        payload: { kind: 'query_feedback', task_id: task.task_id },
+      });
+      this.log.info('查询答复已转反馈卡', { task: task.task_id, approval: approval.approval_id, report: report.report_id });
+      return;
+    }
+
     const level = task.priority || 'P2';
     const footer = text.length > 1500 ? `\n…（全文见报告库 ${report.report_id}）` : '';
     // 战报/周报就是聚合出口本身：它不能再进自己的聚合队列，否则 07:30

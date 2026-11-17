@@ -25,7 +25,9 @@ export const APPROVAL_STATUS = {
 };
 
 const APPROVAL_TRANSITIONS = {
-  pending: ['approved', 'rejected', 'revising', 'expired', 'cancelled'],
+  // pending 可直达 executed：「已阅」这类不需要任何操作、只记录问题的反馈
+  // 不该被逼着走完 approve→execute 两步。
+  pending: ['approved', 'rejected', 'revising', 'expired', 'cancelled', 'executed'],
   revising: ['pending', 'cancelled'],
   approved: ['executing', 'executed', 'cancelled'],
   executing: ['executed', 'rejected'],
@@ -43,6 +45,8 @@ export class ApprovalService {
     this.notifier = notifier;
     /** 批红通过、任务回 queued 之后由 Hub 注入唤醒逻辑（长轮询节点等活中） */
     this.onApproved = () => {};
+    /** 查询反馈被「采纳」后由 Hub 注入：把建议派成新任务去执行 */
+    this.onAdopt = null;
     this.timer = null;
   }
 
@@ -63,7 +67,7 @@ export class ApprovalService {
     const categories = this.config.approvals.categories || [];
     const hay = String(text || '').toLowerCase();
     return categories
-      .filter((c) => (c.keywords || []).some((k) => matchKeyword(hay, k)) || semanticHit(c.id, hay))
+      .filter((c) => (c.keywords || []).some((k) => matchKeyword(hay, k, c.id)) || semanticHit(c.id, hay))
       .map((c) => c.id);
   }
 
@@ -74,7 +78,8 @@ export class ApprovalService {
   /**
    * 创建票拟（待批红）。
    * @param {{title:string, question:string, proposal?:string, category?:string, options?:string[],
-   *          taskId?:string, eventId?:string, requestedBy?:string, payload?:object}} input
+   *          taskId?:string, eventId?:string, requestedBy?:string, payload?:object, chatId?:string}} input
+   *  chatId：指定卡片送达的飞书会话（查询答复要回到提问的那个 p2p 会话）。
    */
   async create(input) {
     const category = input.category || this.classify(`${input.title} ${input.question} ${input.proposal || ''}`)[0] || 'manual';
@@ -82,7 +87,8 @@ export class ApprovalService {
     const id = newApprovalId();
     const dueAt = addSeconds(now, this.config.approvals.reminderHours * 3600);
     const options = input.options || ['agree', 'reject', 'revise'];
-    const catLabel = (this.config.approvals.categories || []).find((c) => c.id === category)?.label || category;
+    const catLabel = (this.config.approvals.categories || []).find((c) => c.id === category)?.label
+      || EXTRA_CATEGORY_LABELS[category] || category;
 
     this.ledger.run(
       `INSERT INTO approvals(approval_id,event_id,task_id,category,title,question,proposal,options,status,revision,
@@ -102,11 +108,13 @@ export class ApprovalService {
     const sent = await this.notifier.notify({
       level: 'P1',
       kind: 'approval',
-      title: `【待批红·${catLabel}】${input.title || '待批红事项'}`,
+      // 查询反馈卡不是要人「批」，标题不带「待批红」；必问清单的票拟卡必须带。
+      title: category === 'query' ? `【查询】${input.title || '查询答复'}` : `【待批红·${catLabel}】${input.title || '待批红事项'}`,
       body: this.renderCardText({ ...input, approval_id: id, category_label: catLabel, options }),
       ref: { approval_id: id, task_id: input.taskId || null, event_id: input.eventId || null },
       dedupeRef: `approval:${id}`,
       card: { approvalId: id, options },
+      chatId: input.chatId || null,
     });
     this.ledger.run(`UPDATE approvals SET channel=? WHERE approval_id=?`, sent?.channel || 'local', id);
     this.log.info('已票拟待批红', { approval: id, category, channel: sent?.channel });
@@ -114,21 +122,24 @@ export class ApprovalService {
   }
 
   renderCardText(a) {
+    const isQuery = a.category === 'query';
     const lines = [
       `事项：${a.title}`,
-      `分类：${a.category_label || a.category}`,
+      `分类：${a.category_label || EXTRA_CATEGORY_LABELS[a.category] || a.category || '未知'}`,
       '',
       a.question,
     ];
     if (a.proposal) lines.push('', `方案：\n${a.proposal}`);
-    lines.push('', '可选：批 / 驳 / 改派（改派请说明要求）');
+    // 可选按钮跟随票拟单自己的 options：批红卡「批 / 驳 / 改派」，查询反馈卡「已阅 / 采纳 / 驳回 / 改派」
+    const labels = (a.options || ['agree', 'reject', 'revise']).map((o) => OPTION_LABELS[o] || o);
+    lines.push('', `可选：${labels.join(' / ')}${isQuery ? '' : '（改派请说明要求）'}`);
     // 批红入口写进卡片：手机上收到推送时能直接知道去哪儿操作。
     // 中台绑 127.0.0.1 时面板只在运行中台的那台机器上可达；绑局域网地址则同网手机可开。
     const { host, port } = this.config?.hub || {};
     const loopback = !host || host === '127.0.0.1' || host === 'localhost';
     const panelUrl = `http://${loopback ? '127.0.0.1' : host}:${port || 8787}`;
-    lines.push(`批红入口：本地面板 ${panelUrl} → 批红页，或 CLI：node src/cli.mjs approve/reject ${a.approval_id}`);
-    lines.push(`编号：${a.approval_id}`, '超时不会默认同意，只会提醒一次。');
+    lines.push(`操作入口：本地面板 ${panelUrl} → ${isQuery ? '查询反馈' : '批红'}页，或 CLI：node src/cli.mjs approve/reject ${a.approval_id}`);
+    lines.push(`编号：${a.approval_id}`, isQuery ? '已阅/驳回只做记录；采纳才会把建议派成任务。' : '超时不会默认同意，只会提醒一次。');
     return lines.join('\n');
   }
 
@@ -149,21 +160,25 @@ export class ApprovalService {
   }
 
   /**
-   * 批红决策。decision: agree | reject | revise
+   * 批红决策。decision: agree | reject | revise | ack（已阅） | adopt（采纳建议并执行）
    * 返回 {ok, approval, error}
    */
   async decide(approvalId, { decision, note, by = 'user', revisedProposal } = {}) {
     const a = this.get(approvalId);
     if (!a) return { ok: false, error: '审批单不存在' };
     const d = normalizeDecision(decision);
-    if (!d) return { ok: false, error: `决策非法：${decision}（应为 agree/reject/revise）` };
+    if (!d) return { ok: false, error: `决策非法：${decision}（应为 agree/reject/revise/ack/adopt）` };
     const allowed = APPROVAL_TRANSITIONS[a.status] || [];
-    const target = d === 'agree' ? APPROVAL_STATUS.APPROVED : d === 'reject' ? APPROVAL_STATUS.REJECTED : APPROVAL_STATUS.REVISING;
+    const target = d === 'agree' || d === 'adopt'
+      ? APPROVAL_STATUS.APPROVED
+      : d === 'ack' ? APPROVAL_STATUS.EXECUTED
+        : d === 'reject' ? APPROVAL_STATUS.REJECTED
+          : APPROVAL_STATUS.REVISING;
     if (!allowed.includes(target)) {
       return { ok: false, error: `当前状态 ${a.status} 不接受该操作` };
     }
     const now = nowIso();
-    return this.ledger.tx(() => {
+    const result = this.ledger.tx(() => {
       this.ledger.run(
         `UPDATE approvals SET status=?, decided_at=?, decided_by=?, decision_note=?, updated_at=?, proposal=COALESCE(?,proposal) WHERE approval_id=?`,
         target, now, by, note || null, now, revisedProposal || null, approvalId,
@@ -189,13 +204,24 @@ export class ApprovalService {
           this.onApproved();
         }
       }
+      if (d === 'ack') {
+        // 已阅：不需要任何操作，把问题记进决定记忆就完事
+        this.#recordDecision(a, 'decided', `已阅（仅记录，无需操作）：${a.title}`, by);
+      }
+      if (d === 'adopt') {
+        // 采纳：按建议执行。查询反馈卡没有挂任务（task_id 为空），执行由
+        // Hub 注入的 onAdopt 钩子在事务提交后派新任务 —— 这里只记录决定。
+        this.#recordDecision(a, 'decided', `已采纳，按建议执行：${a.title}`, by);
+      }
       if (d === 'reject') {
         this.#recordDecision(a, 'refused', note || '（未填理由）', by);
+        // 查询反馈的「驳回」= 不做任何操作，只记录；不把已答复完的查询事件打成 rejected
+        const skipEvent = a.category === 'query';
         if (a.task_id) {
           this.ledger.run(`UPDATE tasks SET status='rejected', finished_at=?, error=? WHERE task_id=?`, now, '批红被驳', a.task_id);
           this.ledger.audit({ entity: 'task', entityId: a.task_id, fromStatus: 'awaiting_approval', toStatus: 'rejected', actor: by });
         }
-        if (a.event_id) {
+        if (a.event_id && !skipEvent) {
           this.ledger.run(`UPDATE events SET status='rejected', updated_at=? WHERE event_id=?`, now, a.event_id);
         }
       }
@@ -204,6 +230,11 @@ export class ApprovalService {
       }
       return { ok: true, approval: this.get(approvalId), decision: d };
     });
+    // 采纳的后续派活在事务提交之后跑（要建任务、可能推通知，属于异步 IO）
+    if (result.ok && d === 'adopt' && typeof this.onAdopt === 'function') {
+      await this.onAdopt({ approval: result.approval, by, note: note || null });
+    }
+    return result;
   }
 
   /** 改派后重新票拟：版本号 +1，回到待批红 */
@@ -232,7 +263,7 @@ export class ApprovalService {
       title: `【重新票拟·第${revision}版】${a.title}`,
       body: this.renderCardText({ ...a, proposal: proposal || a.proposal, question: question || a.question }),
       ref: { approval_id: approvalId },
-      card: { approvalId, options: ['agree', 'reject', 'revise'] },
+      card: { approvalId, options: a.options?.length ? a.options : ['agree', 'reject', 'revise'] },
     });
     return { ok: true, approval: this.get(approvalId) };
   }
@@ -297,7 +328,10 @@ export class ApprovalService {
 function normalizeDecision(d) {
   const v = String(d || '').toLowerCase();
   if (['agree', 'approve', 'approved', 'ok', '同意', '批'].includes(v)) return 'agree';
-  if (['reject', 'rejected', 'deny', 'no', '拒绝', '驳'].includes(v)) return 'reject';
+  // 已阅/采纳：查询反馈卡的专属动作（2026-11-17 分类口径）
+  if (['ack', 'read', 'acknowledged', '已阅'].includes(v)) return 'ack';
+  if (['adopt', 'accepted', '采纳'].includes(v)) return 'adopt';
+  if (['reject', 'rejected', 'deny', 'no', '拒绝', '驳', '驳回'].includes(v)) return 'reject';
   if (['revise', 'rework', 'reassign', '改派', '调整'].includes(v)) return 'revise';
   return null;
 }
@@ -388,6 +422,7 @@ export class Notifier {
             body,
             approvalId: card.approvalId,
             options: card.options || ['agree', 'reject', 'revise'],
+            chatId: chatId || undefined,
           });
         } else {
           await this.feishu.sendMessage({ title, body, level: lvl, chatId: chatId || undefined });
@@ -507,7 +542,9 @@ const SEMANTIC_RULES = [
   },
   {
     id: 'spend_money',
-    patterns: [new RegExp(`(付钱|付费|充值|购买|订购|订阅|升级套餐|升配|买单)${GAP}(元|块|美元|刀|套餐|服务|会员)?`, 'i'), /\$\d+/, /预算是?\s*\d+/i],
+    // 动词里收的都是「真花钱」的动作（2026-11-17 口径：讨论/询价/采购不算，
+    // 由 moneyTalkExempt 豁免层再兜一道）；续费/下单/扣费这类支付动作要认得出。
+    patterns: [new RegExp(`(付钱|付费|充值|购买|订购|订阅|升级套餐|升配|买单|续费|下单|扣费)${GAP}(元|块|美元|刀|套餐|服务|会员)?`, 'i'), /\$\d+/, /预算是?\s*\d+/i],
   },
   {
     id: 'outbound_message',
@@ -646,8 +683,68 @@ function notAnAction(hay, index, text) {
   return true;
 }
 
-/** 单个关键词匹配：支持英文边界，中文按包含 */
-function matchKeyword(hay, keyword) {
+/* ────────────────────────── 分类口径豁免（2026-11-17 老板定） ──────────────────────────
+ *
+ * 两类「看着像、其实不算」的必问事项：
+ *  1) 删除豁免：过程/tmp 文件的清理不算「删数据」——把它们移进 tmp/ 目录留存、
+ *     在 docs/删除记录.md 登记原路径即可回滚，不该为这推批红卡打断人。
+ *  2) 花钱豁免：讨论花钱、采购询价不算「花钱」——目前没有支付渠道，
+ *     只有真支付动作（支付/付款/充值/续费/下单）才需要人批。
+ *
+ * 两条豁免都是窄口径，宁可漏豁免不可错豁免：
+ *  命中句里同时出现受保护对象（数据库/代码/配置…）或真支付动作，照样必批。
+ */
+
+/** tmp/过程文件标记：删除命中附近出现这些，才进入豁免判断 */
+const TMP_DELETE_MARKERS = ['临时文件', '临时目录', '临时数据', '临时产物', '过程文件', '过程数据', '中间产物', '中间文件', '缓存文件', '缓存目录', '缓存数据', '构建产物', '编译产物', '下载缓存', 'tmp', 'temp', 'cache', 'dist', 'build', 'node_modules', '.bak'];
+/** 受保护对象：同句里出现这些，豁免作废（拿不准的一律保留 → 仍走批红） */
+const PROTECTED_DELETE_MARKERS = ['数据库', '数据表', '生产数据', '用户数据', '业务数据', '配置', '代码', '源码', '密钥', '凭证', '分支', '文档', '表', '记录'];
+/** 花钱讨论标记：同句里出现这些算「在谈钱」而不是「要花钱」 */
+const MONEY_TALK_WORDS = ['讨论', '评估', '调研', '咨询', '了解', '询价', '报价', '比价', '对比', '采购', '预算', '估价', '成本', '开支', '收费', '订阅费', '多少钱', '价格', '费用'];
+/** 真支付动作：讨论句里出现这些，豁免作废（「讨论一下要不要给账户充值」仍要批） */
+const MONEY_ACTION_WORDS = ['支付', '付款', '充值', '扣费', '下单', '续费', '付费', '买单'];
+
+/** 取命中所在的句子（按换行/句号/分号切） */
+function sentenceAround(hay, index) {
+  const start = Math.max(
+    hay.lastIndexOf('\n', index),
+    hay.lastIndexOf('。', index),
+    hay.lastIndexOf('；', index),
+    hay.lastIndexOf(';', index),
+  );
+  let end = hay.length;
+  for (const ch of ['\n', '。', '；', ';']) {
+    const at = hay.indexOf(ch, index);
+    if (at >= 0) end = Math.min(end, at);
+  }
+  return hay.slice(start + 1, end);
+}
+
+/** 删除豁免：命中的是「清理过程/tmp 文件」，且句子里没有受保护对象 */
+function tmpDeleteExempt(hay, index, text) {
+  // 对象通常紧跟动词后面，取命中往后的短窗口找 tmp 标记
+  const window = hay.slice(index, index + text.length + 6).toLowerCase();
+  if (!TMP_DELETE_MARKERS.some((m) => window.includes(m))) return false;
+  const sentence = sentenceAround(hay, index).toLowerCase();
+  return !PROTECTED_DELETE_MARKERS.some((m) => sentence.includes(m));
+}
+
+/** 花钱豁免：句子在讨论/询价/采购，且没有真支付动作 */
+function moneyTalkExempt(hay, index, text) {
+  const sentence = sentenceAround(hay, index).toLowerCase();
+  if (!MONEY_TALK_WORDS.some((m) => sentence.includes(m))) return false;
+  return !MONEY_ACTION_WORDS.some((m) => sentence.includes(m));
+}
+
+/** 分类豁免入口：在「在做/在说」之后再判一层「这类命中算不算事项」 */
+function exemptHit(categoryId, hay, index, text) {
+  if (categoryId === 'delete_data') return tmpDeleteExempt(hay, index, text);
+  if (categoryId === 'spend_money') return moneyTalkExempt(hay, index, text);
+  return false;
+}
+
+/** 单个关键词匹配：支持英文边界，中文按包含。categoryId 用于分类口径豁免 */
+function matchKeyword(hay, keyword, categoryId = null) {
   const k = String(keyword || '').toLowerCase().trim();
   if (!k) return false;
   const words = [k, ...(KEYWORD_SYNONYMS[k] || [])];
@@ -662,7 +759,7 @@ function matchKeyword(hay, keyword) {
       while ((m = re.exec(hay)) !== null) {
         // m.index 指向分隔符，关键词真正起点要加上它
         const at = m.index + (m[1] ? m[1].length : 0);
-        if (!negatedBefore(hay, at)) return true;
+        if (!negatedBefore(hay, at) && !exemptHit(categoryId, hay, at, needle)) return true;
       }
     } else {
       let from = 0;
@@ -671,7 +768,7 @@ function matchKeyword(hay, keyword) {
         if (at < 0) break;
         // 关键词通道同样要排除「在描述/在复述规则」：模型答一句「对外发送需要批红」
         // 里没有动作，但它包含关键词「对外发送」——不拦就会每答一次推一张卡。
-        if (!negatedBefore(hay, at) && !notAnAction(hay, at, hay.slice(at, at + needle.length))) return true;
+        if (!negatedBefore(hay, at) && !notAnAction(hay, at, hay.slice(at, at + needle.length)) && !exemptHit(categoryId, hay, at, needle)) return true;
         from = at + needle.length;
       }
     }
@@ -679,7 +776,7 @@ function matchKeyword(hay, keyword) {
   return false;
 }
 
-/** 语义兜底：命中任一意图正则，就算命中该类（同样要排除否定语境） */
+/** 语义兜底：命中任一意图正则，就算命中该类（同样要排除否定语境与口径豁免） */
 function semanticHit(categoryId, hay) {
   const rule = SEMANTIC_RULES.find((r) => r.id === categoryId);
   if (!rule) return false;
@@ -689,11 +786,30 @@ function semanticHit(categoryId, hay) {
     const gre = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
     let m;
     while ((m = gre.exec(hay)) !== null) {
-      if (!negatedBefore(hay, m.index) && !notAnAction(hay, m.index, m[0])) return true;
+      if (!negatedBefore(hay, m.index) && !notAnAction(hay, m.index, m[0]) && !exemptHit(categoryId, hay, m.index, m[0])) return true;
       if (m.index === gre.lastIndex) gre.lastIndex += 1; // 防空匹配死循环
     }
   }
   return false;
+}
+
+/** 必问分类之外的自建票拟分类（查询反馈这类）在人面前显示的名字 */
+const EXTRA_CATEGORY_LABELS = { query: '查询', manual: '手动事项' };
+
+/** 反馈按钮标签：批红卡与查询反馈卡共用一套（飞书卡片与面板都从这里取） */
+export const OPTION_LABELS = {
+  agree: '批',
+  adopt: '采纳',
+  ack: '已阅',
+  reject: '驳回',
+  revise: '改派',
+};
+
+/** 按钮风格：同意/采纳=主按钮，驳回=红，其余默认 */
+export function optionButtonStyle(o) {
+  if (o === 'agree' || o === 'adopt') return 'primary';
+  if (o === 'reject') return 'danger';
+  return 'default';
 }
 
 export { APPROVAL_TRANSITIONS, matchKeyword, notAnAction, SEMANTIC_RULES };

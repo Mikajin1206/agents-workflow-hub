@@ -617,7 +617,8 @@ async function handleFeishuCallback(body) {
         decision: action, note: '（飞书卡片）', by: env.payload.operator || 'feishu',
       });
       if (res.ok) {
-        const label = action === 'agree' ? '已批红' : action === 'reject' ? '已驳回' : '已转改派';
+        const labels = { agree: '已批红', adopt: '已采纳，任务已派出', ack: '已阅（问题已记录）', reject: '已驳回', revise: '已转改派' };
+        const label = labels[action] || '已处理';
         return { ok: true, toast: { type: 'info', content: `${label}：${res.approval?.title || ''}` } };
       }
       return { ok: false, toast: { type: 'error', content: `操作失败：${res.error || '未知原因'}` } };
