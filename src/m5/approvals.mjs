@@ -78,8 +78,12 @@ export class ApprovalService {
   /**
    * 创建票拟（待批红）。
    * @param {{title:string, question:string, proposal?:string, category?:string, options?:string[],
-   *          taskId?:string, eventId?:string, requestedBy?:string, payload?:object, chatId?:string}} input
+   *          taskId?:string, eventId?:string, requestedBy?:string, payload?:object, chatId?:string,
+   *          push?:boolean}} input
    *  chatId：指定卡片送达的飞书会话（查询答复要回到提问的那个 p2p 会话）。
+   *  push:false 只建单不推卡 —— 给「答复命中必问清单」的场景用：票拟由调用方
+   *  并入答复一次推送（修「dev 双推」），避免同一段文字连发两道。
+   *  票拟单照常落库、可批可驳，超时提醒（checkDue）不依赖这条推送，照常生效。
    */
   async create(input) {
     const category = input.category || this.classify(`${input.title} ${input.question} ${input.proposal || ''}`)[0] || 'manual';
@@ -104,6 +108,13 @@ export class ApprovalService {
       entity: 'approval', entityId: id, toStatus: APPROVAL_STATUS.PENDING, actor: input.requestedBy || 'm5',
       detail: { category, category_label: catLabel, task: input.taskId || null },
     });
+
+    if (input.push === false) {
+      // 不单独推卡：channel 记 'merged'，批红信息由调用方并入答复一次推送。
+      this.ledger.run(`UPDATE approvals SET channel=? WHERE approval_id=?`, 'merged', id);
+      this.log.info('已票拟待批红（不单独推卡，由调用方并入答复推送）', { approval: id, category });
+      return this.get(id);
+    }
 
     const sent = await this.notifier.notify({
       level: 'P1',
@@ -141,6 +152,29 @@ export class ApprovalService {
     lines.push(`操作入口：本地面板 ${panelUrl} → ${isQuery ? '查询反馈' : '批红'}页，或 CLI：node src/cli.mjs approve/reject ${a.approval_id}`);
     lines.push(`编号：${a.approval_id}`, isQuery ? '已阅/驳回只做记录；采纳才会把建议派成任务。' : '超时不会默认同意，只会提醒一次。');
     return lines.join('\n');
+  }
+
+  /**
+   * 「答复 + 批红」合成卡正文（2026-11-17 修「dev 双推」）。
+   *
+   * 飞书答复命中必问清单时，答复正文在上、批红信息在下，一张卡说完；
+   * 之前是「票拟卡」+「答复文本」连发两道，同一段文字打扰人两次。
+   * 按钮由 sendApprovalCard 按票拟单 options 追加（批 / 驳回 / 改派），
+   * 卡片 note 自带编号，这里不重复。
+   */
+  renderReplyMergedText(a, answerText) {
+    const { host, port } = this.config?.hub || {};
+    const loopback = !host || host === '127.0.0.1' || host === 'localhost';
+    const panelUrl = `http://${loopback ? '127.0.0.1' : host}:${port || 8787}`;
+    const catLabel = a.meta?.category_label || EXTRA_CATEGORY_LABELS[a.category] || a.category || '事项';
+    return [
+      String(answerText || '').trim() || '（无正文）',
+      '',
+      '──────────────',
+      `⏳ 待批红：${a.question || `本答复涉及「${catLabel}」，相关动作已票拟，等待批红。`}`,
+      `操作入口：本地面板 ${panelUrl} → 批红页，或 CLI：node src/cli.mjs approve/reject ${a.approval_id}`,
+      '超时不会默认同意，只会提醒一次。',
+    ].join('\n');
   }
 
   get(id) {

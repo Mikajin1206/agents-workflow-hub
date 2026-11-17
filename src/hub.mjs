@@ -163,31 +163,56 @@ export class Hub {
     if (task.status === 'completed') {
       this.events.updateEventStatus(task.event_id, EVENT_STATUS.COMPLETED, { task: taskId });
       await this.#maybePipeline(task, event);
-      // 命中必问清单的产出，转成待批红
-      await this.#maybeEscalate(task, event);
+      // 命中必问清单的产出，转成待批红（返回票拟单，给 #deliverResult 并卡用）
+      const escalated = await this.#maybeEscalate(task, event);
       // 规则写了 silent:false 的（每日战报、周报这类），产出必须推给人。
       // 之前这里只打了一行「静默完成」日志，等于把「不静默」做成了静默：
       // 战报 07:30 准时跑完，却没有人收到任何东西。
-      await this.#deliverResult(task);
+      // 飞书答复命中必问清单时，批红信息在这里并入答复一次推送（修「dev 双推」）。
+      await this.#deliverResult(task, escalated);
     } else if (task.status === 'failed') {
       this.events.updateEventStatus(task.event_id, EVENT_STATUS.FAILED, { task: taskId, error: task.error });
       const envelope = task.meta?.envelope || {};
       const isFeishuReply = envelope.source === 'feishu';
       const replyChatId = isFeishuReply ? (task.meta?.payload?.chat_id || null) : null;
-      // 提问失败也要回话：否则人只看到「任务失败」的台账记录，不知道为什么
-      if (isFeishuReply) {
-        await this.notifier.notify({
-          level: 'P1',
-          kind: 'feishu_reply',
-          title: `没做成：${task.title || taskId}`,
-          body: `任务 ${taskId} 失败了。\n\n错误：${(task.error || '未知错误').slice(0, 800)}\n\n可以在面板「任务」页看完整日志，或直接再问一次。`,
-          ref: taskId,
-          dedupeRef: `task_failed:${taskId}`,
-          chatId: replyChatId,
-        });
-      }
       const ask = this.approvals.classify(`${task.title} ${task.error || ''}`);
-      if (ask.length) {
+      // 提问失败也要回话：否则人只看到「任务失败」的台账记录，不知道为什么。
+      // 命中必问清单时不再「失败通知 + 批红卡」连发两道：票拟只建单不推卡，
+      // 批红信息并入失败回话一次推送（2026-11-17 修「dev 双推」）。
+      if (isFeishuReply) {
+        const ticket = ask.length ? await this.approvals.create({
+          title: `任务失败：${task.title}`,
+          question: `任务 ${taskId} 执行失败，且涉及 ${ask.join('/')}。要重试、改派，还是先搁着？`,
+          proposal: `错误：${(task.error || '').slice(0, 800)}`,
+          taskId, eventId: task.event_id, category: ask[0],
+          push: false,
+        }) : null;
+        const answer = `任务 ${taskId} 失败了。\n\n错误：${(task.error || '未知错误').slice(0, 800)}\n\n可以在面板「任务」页看完整日志，或直接再问一次。`;
+        if (ticket) {
+          const sent = await this.notifier.notify({
+            level: 'P1',
+            kind: 'approval',
+            title: `【待批红·${ticket.meta?.category_label || ticket.category}】没做成：${task.title || taskId}`,
+            body: this.approvals.renderReplyMergedText(ticket, answer),
+            ref: { approval_id: ticket.approval_id, task_id: taskId, event_id: task.event_id },
+            dedupeRef: `task_failed:${taskId}`,
+            card: { approvalId: ticket.approval_id, options: ticket.options || ['agree', 'reject', 'revise'] },
+            chatId: replyChatId,
+          });
+          this.ledger.run(`UPDATE approvals SET channel=? WHERE approval_id=?`, sent?.channel || 'local', ticket.approval_id);
+        } else {
+          await this.notifier.notify({
+            level: 'P1',
+            kind: 'feishu_reply',
+            title: `没做成：${task.title || taskId}`,
+            body: answer,
+            ref: taskId,
+            dedupeRef: `task_failed:${taskId}`,
+            chatId: replyChatId,
+          });
+        }
+      } else if (ask.length) {
+        // 非飞书来源的失败：票拟照旧单独推卡（默认会话），不存在「双推」问题
         await this.approvals.create({
           title: `任务失败：${task.title}`,
           question: `任务 ${taskId} 执行失败，且涉及 ${ask.join('/')}。要重试、改派，还是先搁着？`,
@@ -279,14 +304,17 @@ export class Hub {
       .catch((err) => this.log.error('流水线异常', { pipeline: pipelineId, error: err.message }));
   }
 
-  /** 产出里出现必问清单动作 → 必须票拟 */
+  /**
+   * 产出里出现必问清单动作 → 必须票拟。返回建出的票拟单（没有则 null），
+   * 供 #deliverResult 把批红信息并入答复推送。
+   */
   async #maybeEscalate(task, event) {
     // 查询任务的产出只是「建议」，没有在执行任何东西；执行入口是反馈卡上的
     // 「采纳」（采纳后派的新任务会正常走这道 escalate）。在这里再推一张
     // 「是否准予继续执行」的批红卡，是对同一段文字的双重打扰。
-    if (task.skill === 'query') return;
+    if (task.skill === 'query') return null;
     const hits = this.approvals.classify(`${task.result?.text || ''}`);
-    if (!hits.length) return;
+    if (!hits.length) return null;
     // 只有没有「还在拦着」的票拟时才建新单：
     // approval:'always' 的任务（如周日大扫除）进场时已有一张票拟，批准跑完后，
     // 产出里若再次提出要删东西（「将删除：本地分支…」），那是**新的动作**，
@@ -295,13 +323,19 @@ export class Hub {
       `SELECT approval_id FROM approvals WHERE task_id=? AND status IN ('pending','approved','executing')`,
       task.task_id,
     );
-    if (blocking) return;
+    if (blocking) return null;
     const cat = this.config.approvals.categories.find((c) => c.id === hits[0]);
-    await this.approvals.create({
+    // 飞书答复：票拟只建单不推卡（push:false），待批红信息由 #deliverResult
+    // 并入答复一次推送 —— 不再「票拟卡 + 答复文本」连发两道（2026-11-17 修「dev 双推」）。
+    // 非飞书来源（战报/巡检这类）没有「连发两道」问题，票拟照旧单独推卡。
+    const envelope = task.meta?.envelope || {};
+    const isFeishuReply = envelope.source === 'feishu';
+    return await this.approvals.create({
       title: `执行结果涉及「${cat?.label || hits[0]}」：${task.title}`,
       question: `任务已完成分析，但其结果涉及「${cat?.label || hits[0]}」。是否准予继续执行这一步？`,
       proposal: (task.result?.text || '').slice(0, 3000),
       taskId: task.task_id, eventId: task.event_id, category: hits[0],
+      ...(isFeishuReply ? { push: false } : {}),
     });
   }
 
@@ -315,7 +349,7 @@ export class Hub {
    * 等级按任务优先级走：P2 进每日战报聚合队列（07:30 一起发），
    * P0/P1 立即推送。产出全文同时归档进报告库，推送里只放摘要 + 报告号。
    */
-  async #deliverResult(task) {
+  async #deliverResult(task, escalated = null) {
     // 飞书消息是「有人问我话」，产出是回答，不是系统主动打扰。
     // 回答必须回到提问的那个会话 —— 否则人在群里问了「现在的工作状态」，
     // 看见任务跑完，却永远等不到答案（silent:true 会直接把回答吞掉）。
@@ -352,6 +386,29 @@ export class Hub {
         payload: { kind: 'query_feedback', task_id: task.task_id },
       });
       this.log.info('查询答复已转反馈卡', { task: task.task_id, approval: approval.approval_id, report: report.report_id });
+      return;
+    }
+
+    // 命中必问清单的飞书答复（dev 这类开发任务）：答复与批红并一张卡 ——
+    // 答复正文在上、批红信息在下，按钮直接挂在同一张卡上（批 / 驳回 / 改派）。
+    // 票拟单已在 #maybeEscalate 建好（push:false），这里只补一次合并推送，
+    // 不再「票拟卡 + 答复文本」连发两道（2026-11-17 修「dev 双推」）。
+    if (isFeishuReply && escalated) {
+      const footer = text.length > 1800 ? `\n…（全文见报告库 ${report.report_id}）` : '';
+      const sent = await this.notifier.notify({
+        level: 'P1',
+        kind: 'approval',
+        title: `【待批红·${escalated.meta?.category_label || escalated.category}】${task.title || '答复'}`,
+        body: this.approvals.renderReplyMergedText(escalated, `${text.slice(0, 1800)}${footer}`),
+        ref: { approval_id: escalated.approval_id, task_id: task.task_id, event_id: task.event_id },
+        dedupeRef: `task_result:${task.task_id}`,
+        card: { approvalId: escalated.approval_id, options: escalated.options || ['agree', 'reject', 'revise'] },
+        chatId: replyChatId,
+      });
+      this.ledger.run(`UPDATE approvals SET channel=? WHERE approval_id=?`, sent?.channel || 'local', escalated.approval_id);
+      this.log.info('答复与待批红已并一张卡推送', {
+        task: task.task_id, approval: escalated.approval_id, report: report.report_id, channel: sent?.channel,
+      });
       return;
     }
 
