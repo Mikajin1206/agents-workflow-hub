@@ -227,8 +227,13 @@ function resolveModel(engineId, model) {
 
 /**
  * 执行一次任务。返回 {ok, exitCode, text, error, durationMs, logPath, engine}
+ *
+ * redact：需要打码的秘密（字符串或数组，通常是中台访问令牌）。
+ * 引擎会把派活提示词回显进自己的 stdout（提示词转储），而提示词里有注入的真实令牌——
+ * 2026-11-18 发现它明文落进了 engine-*.log。引擎日志落盘前、以及回传中台的
+ * stdout/stderr/error，都过 redactSecrets 打一层码。
  */
-export async function runWithEngine({ engineId, prompt, task, workdir, model, mode = 'work', log, logDir, timeoutMs }) {
+export async function runWithEngine({ engineId, prompt, task, workdir, model, mode = 'work', log, logDir, timeoutMs, redact }) {
   const engine = getEngine(engineId);
   if (!engine) {
     return { ok: false, exitCode: 127, text: '', error: `未知引擎：${engineId}`, engine: engineId };
@@ -236,6 +241,7 @@ export async function runWithEngine({ engineId, prompt, task, workdir, model, mo
   const started = Date.now();
   const finalPrompt = `${COMMON_RULES}\n\n${prompt}`;
   model = resolveModel(engineId, model);
+  const mask = (s) => redactSecrets(s, redact);
 
   if (typeof engine.run === 'function') {
     const res = await engine.run({ prompt: finalPrompt, task, workdir, model, mode, log });
@@ -264,6 +270,7 @@ export async function runWithEngine({ engineId, prompt, task, workdir, model, mo
     logPath,
     onLog: log?.debug,
     env: engine.id === 'codex' ? codexIsolatedEnv() : undefined,
+    redact: mask,
   });
 
   let text = '';
@@ -275,14 +282,28 @@ export async function runWithEngine({ engineId, prompt, task, workdir, model, mo
   return {
     ok: res.code === 0,
     exitCode: res.code,
-    text,
-    stdout: truncate(res.stdout, 20_000),
-    stderr: truncate(res.stderr, 8_000),
-    error: res.code === 0 ? null : (res.stderr || res.stdout || `退出码 ${res.code}`).slice(0, 2000),
+    text: mask(text),
+    stdout: truncate(mask(res.stdout), 20_000),
+    stderr: truncate(mask(res.stderr), 8_000),
+    error: res.code === 0 ? null : mask(res.stderr || res.stdout || `退出码 ${res.code}`).slice(0, 2000),
     durationMs: Date.now() - started,
     logPath,
     engine: engine.id,
   };
+}
+
+/**
+ * 秘密打码：把字符串里出现的真实令牌替换成「【已打码】」。
+ * 只处理长度 ≥ 8 的秘密，避免短字符串把正文误伤成大片占位符；
+ * 秘密为空（本地无密钥模式）时原样返回。
+ */
+export function redactSecrets(s, secrets) {
+  let out = String(s ?? '');
+  for (const sec of Array.isArray(secrets) ? secrets : [secrets]) {
+    const v = String(sec || '');
+    if (v.length >= 8) out = out.split(v).join('【已打码】');
+  }
+  return out;
 }
 
 function extractTextFromStdout(engineId, stdout) {
@@ -419,12 +440,16 @@ function quoteWin(s) {
   return /[\s"&|<>^()]/.test(str) ? `"${str}"` : str;
 }
 
-export function runProcess(bin, args, { cwd, timeoutMs = 900_000, logPath, onLog, env, input } = {}) {
+export function runProcess(bin, args, { cwd, timeoutMs = 900_000, logPath, onLog, env, input, redact } = {}) {
   return new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
     let timedOut = false;
     let stream = null;
+    // 日志落盘前打码（redact 是 (s) => string；未传就是原样写）。
+    // 按 chunk 打码有一个理论残留：一个秘密恰好跨两个 chunk 被切开就打不掉，
+    // 实际 chunk ≥ 64KB、令牌只出现一次，概率可忽略；resolve 前还会对累积全文再打一遍。
+    const mask = typeof redact === 'function' ? redact : ((s) => s);
     if (logPath) {
       try {
         fs.mkdirSync(path.dirname(logPath), { recursive: true });
@@ -496,26 +521,26 @@ export function runProcess(bin, args, { cwd, timeoutMs = 900_000, logPath, onLog
     child.stdout?.on('data', (buf) => {
       const s = buf.toString();
       stdout += s;
-      stream?.write(s);
+      stream?.write(mask(s));
       if (stdout.length > 2_000_000) stdout = stdout.slice(-1_000_000);
     });
     child.stderr?.on('data', (buf) => {
       const s = buf.toString();
       stderr += s;
-      stream?.write(s);
+      stream?.write(mask(s));
       if (stderr.length > 500_000) stderr = stderr.slice(-250_000);
     });
     child.on('error', (err) => {
       clearTimeout(timer);
       onLog?.('子进程启动失败', { bin, error: err.message });
       stream?.end();
-      resolve({ code: 127, stdout, stderr: stderr + '\n' + err.message, timedOut });
+      resolve({ code: 127, stdout: mask(stdout), stderr: mask(stderr) + '\n' + err.message, timedOut });
     });
     child.on('close', (code) => {
       clearTimeout(timer);
       stream?.end();
       onLog?.('子进程结束', { bin, code, timedOut });
-      resolve({ code: timedOut ? 124 : (code ?? 1), stdout, stderr, timedOut });
+      resolve({ code: timedOut ? 124 : (code ?? 1), stdout: mask(stdout), stderr: mask(stderr), timedOut });
     });
   });
 }

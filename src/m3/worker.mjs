@@ -117,6 +117,10 @@ async function handleTask({ le, hubUrl, nodeId, cfg, log, skills, decisions }) {
       mode: task.meta?.payload?.mode || 'work',
       log,
       logDir,
+      // 真实令牌同时交给引擎层做打码：引擎回显的提示词转储、引擎日志与回传的
+      // 错误信息里出现的令牌一律替换成「【已打码】」再落盘/回传（2026-11-18 发现
+      // 令牌明文留在引擎执行日志里）。
+      redact: hubTokenValue(),
     });
 
     const payload = {

@@ -446,7 +446,10 @@ async function main() {
   });
   ok(!promptWithToken.includes('{{token}}'), 'SOP 里的 {{token}} 占位被替换掉');
   ok(promptWithToken.includes('x-hub-token: e2e-test-token'), '替换成真实访问令牌', promptWithToken.slice(0, 120));
-  // 未配令牌（调用方传空）时保持字面量，不注入空值或默认开发值
+  // 未配令牌（调用方传空）时替换成哨兵 __TOKEN_NOT_SET__，不再保留字面占位符：
+  // 日报 SOP 的兜底判据只认哨兵。旧写法「占位符原样出现=未配密钥」有歧义——
+  // 替换后提示词里仍有 token 字样（请求头名等），codex 误判未配密钥、主动省掉
+  // 鉴权头，三个接口全 401（2026-11-18 战报实测）
   const promptNoToken = hub.skills.buildPrompt({
     task: { title: '出日报', prompt: '汇总一下' },
     skill: { name: 'daily-report', meta: { title: '每日战报' }, body: '带头 x-hub-token: {{token}} 调 {{hub}}/api/stats' },
@@ -455,7 +458,8 @@ async function main() {
     payload: {},
     hubUrl: 'http://127.0.0.1:8787',
   });
-  ok(promptNoToken.includes('{{token}}'), '未配令牌时 {{token}} 保持原样不注入');
+  ok(promptNoToken.includes('x-hub-token: __TOKEN_NOT_SET__'), '未配令牌时 {{token}} 替换成哨兵 __TOKEN_NOT_SET__');
+  ok(!promptNoToken.includes('{{token}}'), '占位符不再原样保留（消除「原样出现=未配密钥」的歧义判据）');
 
   /* ─────────── 10. 报告归档 ─────────── */
   section('M6 报告归档');
