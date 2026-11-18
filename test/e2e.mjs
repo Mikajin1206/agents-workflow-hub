@@ -550,8 +550,8 @@ async function main() {
       workArgs);
     const reviewArgs = enginesMod.getEngine('claude-code')
       .buildArgs({ prompt: 'x', workdir: '.', mode: 'review' });
-    ok(reviewArgs.includes('plan') && !reviewArgs.includes('bypassPermissions'),
-      'claude 审查模式必须是 plan（只读），不能顺手带上干活权限',
+    ok(reviewArgs[reviewArgs.indexOf('--tools') + 1] === '' && !reviewArgs.includes('bypassPermissions'),
+      'claude 审查只读入 diff，关闭工具和干活权限',
       reviewArgs);
 
     // 坑 5（2026-11-14）：rules.json 改了不生效。RuleSet 只在 constructor 里

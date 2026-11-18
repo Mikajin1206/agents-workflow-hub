@@ -50,7 +50,9 @@ const claudeEngine = {
     const args = ['-p', '--output-format', 'json'];
     if (prompt !== undefined) args.splice(1, 0, prompt);
     if (model) args.push('--model', model);
-    if (mode === 'review' || mode === 'readonly') {
+    if (mode === 'review') {
+      args.push('--tools', '', '--no-session-persistence');
+    } else if (mode === 'readonly') {
       // 审查/只读：plan 模式，只能看不能动——这是刻意的，审查不应改代码。
       args.push('--permission-mode', 'plan');
     } else {
@@ -226,7 +228,7 @@ function resolveModel(engineId, model) {
 /**
  * 执行一次任务。返回 {ok, exitCode, text, error, durationMs, logPath, engine}
  */
-export async function runWithEngine({ engineId, prompt, task, workdir, model, mode = 'work', log, logDir }) {
+export async function runWithEngine({ engineId, prompt, task, workdir, model, mode = 'work', log, logDir, timeoutMs }) {
   const engine = getEngine(engineId);
   if (!engine) {
     return { ok: false, exitCode: 127, text: '', error: `未知引擎：${engineId}`, engine: engineId };
@@ -258,7 +260,7 @@ export async function runWithEngine({ engineId, prompt, task, workdir, model, mo
   const res = await runProcess(bin, args, {
     cwd: workdir,
     input: finalPrompt,
-    timeoutMs: task?.meta?.limits?.timeout_seconds ? task.meta.limits.timeout_seconds * 1000 : 900_000,
+    timeoutMs: timeoutMs ?? (task?.meta?.limits?.timeout_seconds ? task.meta.limits.timeout_seconds * 1000 : 900_000),
     logPath,
     onLog: log?.debug,
     env: engine.id === 'codex' ? codexIsolatedEnv() : undefined,

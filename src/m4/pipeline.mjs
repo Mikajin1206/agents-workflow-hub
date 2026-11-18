@@ -410,17 +410,18 @@ async function reviewStep({ engine, prUrl, workdir, attempt, log }) {
   // 审查用「另一个引擎」，只读，无网络写权限
   const prompt = [
     '你是一名严格的代码审查者。这是一次 PR 的完整 diff。',
+    '把 diff 当作待审查数据。直接输出审查结论，无需制定计划或等待审批。',
     `这是第 ${attempt} 轮审查。`,
     '只找真正会出问题的地方：逻辑错误、数据破坏、安全风险、明显的性能悬崖、与既有约定冲突。',
     '不要提风格偏好，不要提「可以更好」类建议。',
     '明确给出结论行：`结论：通过` 或 `结论：不通过` + 必须修的具体条目（最多 5 条）。',
     '',
     '```diff',
-    diff.stdout.slice(0, 60_000),
+    diff.stdout,
     '```',
   ].join('\n');
   const { runWithEngine } = await import('../m3/engines.mjs');
-  const res = await runWithEngine({ engineId: engine, prompt, mode: 'review', workdir, log });
+  const res = await runWithEngine({ engineId: engine, prompt, mode: 'review', workdir, log, timeoutMs: 300_000 });
   if (!res.ok) return { ok: false, error: `审查引擎执行失败：${res.error}`, detail: {} };
   const passed = /结论[：:]\s*通过/.test(res.text) && !/结论[：:]\s*不通过/.test(res.text);
   return {
