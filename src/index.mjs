@@ -617,7 +617,9 @@ async function handleFeishuCallback(body) {
         decision: action, note: '（飞书卡片）', by: env.payload.operator || 'feishu',
       });
       if (res.ok) {
-        const labels = { agree: '已批红', adopt: '已采纳，任务已派出', ack: '已阅（问题已记录）', reject: '已驳回', revise: '已转改派' };
+        // 采纳的回执写明预期结果（2026-11-18 汇报规范：需要知道「之后会发生什么」）：
+        // 任务已派出，做完会自动回到这个会话汇报。
+        const labels = { agree: '已批红', adopt: '已采纳，任务已派出（完成后自动汇报）', ack: '已阅（问题已记录）', reject: '已驳回', revise: '已转改派' };
         const label = labels[action] || '已处理';
         return { ok: true, toast: { type: 'info', content: `${label}：${res.approval?.title || ''}` } };
       }

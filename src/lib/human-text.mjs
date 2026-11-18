@@ -40,3 +40,29 @@ export function errorOneLine(err, max = 200) {
   if (!s) return '未知原因';
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
+
+/**
+ * 从查询答复里摘出「下一步的执行建议」一段（2026-11-18 采纳执行优化）。
+ *
+ * 查询答复固定三段：问题理解 / 问题分析 / 下一步的执行建议。采纳派活时，
+ * 干活的人只需要建议段——理解与分析是给老板看的背景，不是施工图，
+ * 整篇塞进任务只会把执行带偏（实测：把答复全文派下去，执行者跑去重新调查一遍）。
+ *
+ * 兼容两种标题形态：原始 Markdown 的「### 下一步的执行建议」，
+ * 和 forHuman() 整理后存进票拟单的「下一步的执行建议」。
+ * 找不到结构化标题或段落为空时原样返回全文（宁多勿漏，不要派空任务）。
+ */
+export function suggestionsFromQueryAnswer(text) {
+  const raw = String(text ?? '');
+  const lines = raw.replace(/\r\n?/g, '\n').split('\n');
+  const isHeading = (line) => {
+    const t = line.trim();
+    return /^#{1,6}\s*\S/.test(t) || /^「[^」\n]+」$/.test(t);
+  };
+  const start = lines.findIndex((l) => /下一步的执行建议/.test(l) && isHeading(l));
+  if (start < 0) return raw.trim();
+  const rest = lines.slice(start + 1);
+  const next = rest.findIndex(isHeading);
+  const body = (next < 0 ? rest : rest.slice(0, next)).join('\n').trim();
+  return body || raw.trim();
+}

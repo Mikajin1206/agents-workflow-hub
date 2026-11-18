@@ -103,7 +103,12 @@ export class ApprovalService {
       input.title || '待批红事项', input.question || '是否准予？', input.proposal || null,
       JSON.stringify(options), APPROVAL_STATUS.PENDING, 1, input.requestedBy || 'm5',
       now, now, dueAt, null,
-      JSON.stringify({ category_label: catLabel, payload: input.payload || {}, silent: false }),
+      // chatId 记进票拟单：查询反馈卡「采纳」后，onAdopt 靠它把新任务的
+      // 回执送回采纳发生的那个会话（表里没有 chat_id 列，落 meta）。
+      JSON.stringify({
+        category_label: catLabel, payload: input.payload || {}, silent: false,
+        ...(input.chatId ? { chat_id: input.chatId } : {}),
+      }),
     );
     this.ledger.audit({
       entity: 'approval', entityId: id, toStatus: APPROVAL_STATUS.PENDING, actor: input.requestedBy || 'm5',
