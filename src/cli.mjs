@@ -305,7 +305,7 @@ async function cmdPipeline(args, config) {
     const engine = String(args.engine || 'codex');
     const prUrl = `https://github.com/${repo}/pull/${pr}`;
     try {
-      const pipelineId = hub.pipeline.create({ repo, prNumber: pr, prUrl, engine });
+      const pipelineId = hub.pipeline.create({ repo, prNumber: pr, prUrl, engine, controllerPid: process.pid });
       console.log(pipelineId);
       const result = await hub.pipeline.run({
         pipelineId, repo, prNumber: pr, prUrl, engine,

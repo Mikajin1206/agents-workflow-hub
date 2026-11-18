@@ -36,7 +36,7 @@ export class Pipeline {
   }
 
   /** 建立一次流水线运行记录 */
-  create({ taskId, repo, prNumber, prUrl, commitSha, engine = 'claude-code' }) {
+  create({ taskId, repo, prNumber, prUrl, commitSha, engine = 'claude-code', controllerPid }) {
     const id = newPipelineId();
     this.ledger.run(
       `INSERT INTO pipeline_runs(pipeline_id,task_id,repo,pr_number,pr_url,commit_sha,step,step_index,attempt,status,started_at,detail)
@@ -44,7 +44,7 @@ export class Pipeline {
       id, taskId || null, repo, prNumber || null, prUrl || null, commitSha || null,
       'review', 0, 1, 'running', nowIso(), null,
     );
-    this.ledger.audit({ entity: 'pipeline', entityId: id, toStatus: 'running', actor: 'm4', detail: { repo, pr: prNumber } });
+    this.ledger.audit({ entity: 'pipeline', entityId: id, toStatus: 'running', actor: 'm4', detail: { repo, pr: prNumber, controllerPid } });
     return id;
   }
 

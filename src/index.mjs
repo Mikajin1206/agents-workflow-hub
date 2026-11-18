@@ -119,7 +119,16 @@ router.get('/api/pipeline/:id', (ctx) => {
   if (!guard(ctx)) return;
   const rows = hub.ledger.all('SELECT * FROM pipeline_runs WHERE pipeline_id=? ORDER BY seq', ctx.params.id);
   if (!rows.length) return ctx.error('流水线不存在', 404);
-  ctx.json({ ok: true, pipeline_id: ctx.params.id, active: hub.pipeline.active.has(ctx.params.id), steps: rows });
+  const creation = hub.ledger.get(
+    "SELECT detail FROM event_audit WHERE entity='pipeline' AND entity_id=? AND to_status='running' ORDER BY audit_id LIMIT 1",
+    ctx.params.id,
+  );
+  const owner = safeJson(creation?.detail, {})?.controllerPid;
+  let active = hub.pipeline.active.has(ctx.params.id);
+  if (!active && Number.isSafeInteger(owner) && owner > 0) {
+    try { process.kill(owner, 0); active = true; } catch { /* 独立进程已退出 */ }
+  }
+  ctx.json({ ok: true, pipeline_id: ctx.params.id, active, steps: rows });
 });
 
 /**
