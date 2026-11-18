@@ -111,7 +111,7 @@ router.get('/api/pipeline/:id', (ctx) => {
 /**
  * 手动触发一次流水线。
  * autoStart=false 时这是唯一入口；面板上的「进流水线」按钮走这里。
- * 不给 release/verify 配置就会在④⑤如实报错，不会假装成功。
+ * 真实模式在合并前检查发布和核实命令是否已配置。
  */
 router.post('/api/pipeline', async (ctx) => {
   if (!guard(ctx)) return;
@@ -136,7 +136,7 @@ router.post('/api/pipeline', async (ctx) => {
       prUrl,
       taskId: b.task_id || null,
       engine: b.engine || 'codex',
-      options: { workdir: b.workdir, skip: Array.isArray(b.skip) ? b.skip : undefined },
+      options: { skip: Array.isArray(b.skip) ? b.skip : undefined },
     })
     .catch((err) => hub.log.error('流水线异常', { pipeline: pipelineId, error: err.message }));
   ctx.json({ ok: true, pipeline_id: pipelineId, status: 'started' });

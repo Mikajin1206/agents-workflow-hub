@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { nowIso } from '../lib/config.mjs';
+import { HUB_ROOT, nowIso } from '../lib/config.mjs';
 import { newPipelineId, newApprovalId } from '../lib/ids.mjs';
 
 /**
@@ -50,11 +50,7 @@ export class Pipeline {
 
   /** 跑五步。任何一步失败就停，按失败位置决定通知级别。 */
   async run({ pipelineId, repo, prNumber, prUrl, taskId, engine = 'claude-code', options = {} }) {
-    // 工作目录：调用方传了就听调用方的，没传才用配置里的默认项目目录。
-    // 没有这个回退，从面板/API 触发时 ②③④⑤ 会以 hub 自己的目录为 cwd 跑，
-    // 于是「检查通过」「发布成功」全是在错的仓库上发生的 —— 比失败更危险。
-    const workdir = options.workdir || this.config?.pipeline?.defaultWorkdir || null;
-    const state = { pipelineId, repo, prNumber, prUrl, taskId, engine, options: { ...options, workdir } };
+    const state = { pipelineId, repo, prNumber, prUrl, taskId, engine, options: { ...options, workdir: HUB_ROOT } };
     const steps = [];
     this.active.set(pipelineId, state);
     try {
@@ -354,6 +350,9 @@ export function createRunner({ config, log, engines, mode = 'auto' }) {
         case 'check':
           return checkStep({ workdir, log });
         case 'merge':
+          if (!config.pipeline?.releaseCommand || !config.pipeline?.verifyCommand) {
+            return { ok: false, error: '合并前必须配置发布和核实命令', detail: {} };
+          }
           return mergeStep({ prNumber, repo, workdir, log });
         case 'release':
           return releaseStep({ config, workdir, log });
