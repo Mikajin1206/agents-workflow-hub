@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { OPTION_LABELS, optionButtonStyle } from './approvals.mjs';
 
 /**
  * 飞书开放平台最小客户端（零依赖，只用内置 fetch）。
@@ -59,15 +60,19 @@ export class FeishuClient {
     return { ok: true, messageId: data.data?.message_id };
   }
 
-  /** 发交互卡片（票拟卡：批 / 驳 / 改派） */
-  async sendApprovalCard({ title, body, approvalId, options = ['agree', 'reject', 'revise'] }) {
-    const target = this.cfg.chatId;
+  /**
+   * 发交互卡片。两种用法：
+   *   票拟卡（批 / 驳 / 改派）与查询反馈卡（已阅 / 采纳 / 驳回 / 改派）。
+   * chatId 不传发到配置的默认会话；查询答复必须回到提问的那个 p2p 会话，由调用方传。
+   */
+  async sendApprovalCard({ title, body, approvalId, options = ['agree', 'reject', 'revise'], chatId }) {
+    const target = chatId || this.cfg.chatId;
     if (!target) throw new Error('未配置飞书 chatId');
     const token = await this.#getToken();
     const buttons = options.map((o) => ({
       tag: 'button',
-      text: { tag: 'plain_text', content: optionLabel(o) },
-      type: o === 'agree' ? 'primary' : o === 'reject' ? 'danger' : 'default',
+      text: { tag: 'plain_text', content: OPTION_LABELS[o] || String(o) },
+      type: optionButtonStyle(o),
       value: { action: `approval:${o}`, approval_id: approvalId },
     }));
     const card = {
@@ -132,13 +137,6 @@ export class FeishuClient {
     const b = Buffer.from(String(signature), 'utf8');
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
-}
-
-function optionLabel(o) {
-  if (o === 'agree') return '批';
-  if (o === 'reject') return '驳';
-  if (o === 'revise') return '改派';
-  return String(o);
 }
 
 function richPost({ title, body, level }) {

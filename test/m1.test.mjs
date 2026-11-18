@@ -22,7 +22,7 @@ const silentLog = { info() {}, warn() {}, error() {}, debug() {} };
 
 function makeAdapter(overrides = {}) {
   const config = loadConfig();
-  config.github.allowedRepos = overrides.allowedRepos || [];
+  config.github.allowedRepos = overrides.allowedRepos ?? ['acme/shop'];
   return new WebhookAdapter({ config, events: null, log: silentLog });
 }
 
@@ -50,6 +50,15 @@ test('github: issues.opened 翻译成 github.issue 信封', () => {
   // 长正文必须截断，否则会把整篇 issue 塞进提示词
   assert.equal(env.payload.issue_body.length, 4001, '4000 字符 + 省略号');
   assert.ok(env.payload.issue_body.endsWith('…'));
+});
+
+test('github: ping 只确认 webhook，不生成业务事件', () => {
+  const a = makeAdapter();
+  const env = a.github(ghHeaders('ping'), {
+    zen: 'Keep it logically awesome.',
+    repository: { full_name: 'acme/shop' },
+  });
+  assert.equal(env, null);
 });
 
 test('github: issues 的非 opened 动作要抛 UNHANDLED，不能静默变成任务', () => {
@@ -103,10 +112,12 @@ test('github: allowlist 挡住非白名单仓库', () => {
   assert.equal(ok.target, 'acme/shop');
 });
 
-test('github: allowlist 为空时放行一切（本地开发语义）', () => {
+test('github: allowlist 为空时拒绝所有仓库', () => {
   const a = makeAdapter({ allowedRepos: [] });
-  const env = a.github(ghHeaders('issues'), { action: 'opened', repository: { full_name: 'anyone/anything' }, issue: { number: 9, title: 'y' } });
-  assert.equal(env.target, 'anyone/anything');
+  assert.throws(
+    () => a.github(ghHeaders('issues'), { action: 'opened', repository: { full_name: 'anyone/anything' }, issue: { number: 9, title: 'y' } }),
+    (err) => err.code === 'REPO_NOT_ALLOWED',
+  );
 });
 
 // ---------- WebhookAdapter.generic / manual / feishu ----------

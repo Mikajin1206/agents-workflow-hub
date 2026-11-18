@@ -19,6 +19,9 @@ const COMMON_RULES = [
   '1) 不询问、不等待，缺信息就按最保守的方式推进，并在结果里写清假设。',
   '2) 代码类任务止步于「提交 + 开 PR」，绝不直接合并到主干、绝不部署上线。',
   '3) 不删数据、不停服、不花钱、不对外发消息、不改权限——遇到这类事停下来，写明「需要批红」并说明原因。',
+  '   例外（2026-11-17 定）：清理过程/tmp 文件（临时文件、缓存、构建产物等）不算删数据——'
+  + '把它们移进仓库根的 tmp/ 目录留存，并在 docs/删除记录.md 里登记「日期、原路径、去向、原因」，可回滚即可；'
+  + '数据库、配置、代码、文档等真实数据的删除仍必须批红。',
   '4) 完成后用一句话结论 + 3~6 条要点输出，不要贴大段日志。',
   '5) 一切操作要留下可复查的痕迹（改了哪些文件、跑了什么命令、结果如何）。',
 ].join('\n');
@@ -44,9 +47,12 @@ const claudeEngine = {
     return whichSync(['claude.cmd', 'claude', 'claude.exe']) !== null;
   },
   buildArgs({ prompt, workdir, model, mode }) {
-    const args = ['-p', prompt, '--output-format', 'json'];
+    const args = ['-p', '--output-format', 'json'];
+    if (prompt !== undefined) args.splice(1, 0, prompt);
     if (model) args.push('--model', model);
-    if (mode === 'review' || mode === 'readonly') {
+    if (mode === 'review') {
+      args.push('--tools', '', '--no-session-persistence');
+    } else if (mode === 'readonly') {
       // 审查/只读：plan 模式，只能看不能动——这是刻意的，审查不应改代码。
       args.push('--permission-mode', 'plan');
     } else {
@@ -110,7 +116,7 @@ const codexEngine = {
       args.push('--sandbox', sb);
     }
     if (outputFile) args.push('-o', outputFile);
-    args.push(prompt);
+    args.push(prompt ?? '-');
     return args;
   },
   bin: () => whichSync(['codex.cmd', 'codex', 'codex.exe']),
@@ -221,8 +227,13 @@ function resolveModel(engineId, model) {
 
 /**
  * 执行一次任务。返回 {ok, exitCode, text, error, durationMs, logPath, engine}
+ *
+ * redact：需要打码的秘密（字符串或数组，通常是中台访问令牌）。
+ * 引擎会把派活提示词回显进自己的 stdout（提示词转储），而提示词里有注入的真实令牌——
+ * 2026-11-18 发现它明文落进了 engine-*.log。引擎日志落盘前、以及回传中台的
+ * stdout/stderr/error，都过 redactSecrets 打一层码。
  */
-export async function runWithEngine({ engineId, prompt, task, workdir, model, mode = 'work', log, logDir }) {
+export async function runWithEngine({ engineId, prompt, task, workdir, model, mode = 'work', log, logDir, timeoutMs, redact }) {
   const engine = getEngine(engineId);
   if (!engine) {
     return { ok: false, exitCode: 127, text: '', error: `未知引擎：${engineId}`, engine: engineId };
@@ -230,6 +241,7 @@ export async function runWithEngine({ engineId, prompt, task, workdir, model, mo
   const started = Date.now();
   const finalPrompt = `${COMMON_RULES}\n\n${prompt}`;
   model = resolveModel(engineId, model);
+  const mask = (s) => redactSecrets(s, redact);
 
   if (typeof engine.run === 'function') {
     const res = await engine.run({ prompt: finalPrompt, task, workdir, model, mode, log });
@@ -249,14 +261,16 @@ export async function runWithEngine({ engineId, prompt, task, workdir, model, mo
   // （调试、脚本、单测）都会在仓库根目录留下一堆 engine-*.log 垃圾文件。
   const scratchDir = logDir || path.join(os.tmpdir(), 'agents-workflow-engine-logs');
   const outputFile = path.join(scratchDir, `last-message-${task?.task_id || Date.now()}.txt`);
-  const args = engine.buildArgs({ prompt: finalPrompt, workdir, model, mode, outputFile });
+  const args = engine.buildArgs({ workdir, model, mode, outputFile });
   const logPath = path.join(scratchDir, `engine-${task?.task_id || Date.now()}.log`);
   const res = await runProcess(bin, args, {
     cwd: workdir,
-    timeoutMs: task?.meta?.limits?.timeout_seconds ? task.meta.limits.timeout_seconds * 1000 : 900_000,
+    input: finalPrompt,
+    timeoutMs: timeoutMs ?? (task?.meta?.limits?.timeout_seconds ? task.meta.limits.timeout_seconds * 1000 : 900_000),
     logPath,
     onLog: log?.debug,
     env: engine.id === 'codex' ? codexIsolatedEnv() : undefined,
+    redact: mask,
   });
 
   let text = '';
@@ -268,14 +282,28 @@ export async function runWithEngine({ engineId, prompt, task, workdir, model, mo
   return {
     ok: res.code === 0,
     exitCode: res.code,
-    text,
-    stdout: truncate(res.stdout, 20_000),
-    stderr: truncate(res.stderr, 8_000),
-    error: res.code === 0 ? null : (res.stderr || res.stdout || `退出码 ${res.code}`).slice(0, 2000),
+    text: mask(text),
+    stdout: truncate(mask(res.stdout), 20_000),
+    stderr: truncate(mask(res.stderr), 8_000),
+    error: res.code === 0 ? null : mask(res.stderr || res.stdout || `退出码 ${res.code}`).slice(0, 2000),
     durationMs: Date.now() - started,
     logPath,
     engine: engine.id,
   };
+}
+
+/**
+ * 秘密打码：把字符串里出现的真实令牌替换成「【已打码】」。
+ * 只处理长度 ≥ 8 的秘密，避免短字符串把正文误伤成大片占位符；
+ * 秘密为空（本地无密钥模式）时原样返回。
+ */
+export function redactSecrets(s, secrets) {
+  let out = String(s ?? '');
+  for (const sec of Array.isArray(secrets) ? secrets : [secrets]) {
+    const v = String(sec || '');
+    if (v.length >= 8) out = out.split(v).join('【已打码】');
+  }
+  return out;
 }
 
 function extractTextFromStdout(engineId, stdout) {
@@ -412,12 +440,16 @@ function quoteWin(s) {
   return /[\s"&|<>^()]/.test(str) ? `"${str}"` : str;
 }
 
-export function runProcess(bin, args, { cwd, timeoutMs = 900_000, logPath, onLog, env } = {}) {
+export function runProcess(bin, args, { cwd, timeoutMs = 900_000, logPath, onLog, env, input, redact } = {}) {
   return new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
     let timedOut = false;
     let stream = null;
+    // 日志落盘前打码（redact 是 (s) => string；未传就是原样写）。
+    // 按 chunk 打码有一个理论残留：一个秘密恰好跨两个 chunk 被切开就打不掉，
+    // 实际 chunk ≥ 64KB、令牌只出现一次，概率可忽略；resolve 前还会对累积全文再打一遍。
+    const mask = typeof redact === 'function' ? redact : ((s) => s);
     if (logPath) {
       try {
         fs.mkdirSync(path.dirname(logPath), { recursive: true });
@@ -472,11 +504,15 @@ export function runProcess(bin, args, { cwd, timeoutMs = 900_000, logPath, onLog
       windowsHide: true,
       windowsVerbatimArguments: viaCmd,
       shell: false,
-      // stdin 必须显式 ignore：默认 'pipe' 会留一个永不关闭的管道，
-      // codex 之类的 CLI 检测到非 TTY 就会打印 "Reading additional input from stdin..."
-      // 并一直等 EOF —— 表现为任务永远卡住直到超时（实测 45s 才被 SIGKILL）。
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
+    if (child.stdin) {
+      // 子进程提前退出时，写入管道可能失败。退出状态和 stderr 仍由进程事件处理。
+      child.stdin.on('error', (err) => {
+        if (err.code !== 'EPIPE') stderr += `\nstdin: ${err.message}`;
+      });
+      child.stdin.end(input, 'utf8');
+    }
     const timer = setTimeout(() => {
       timedOut = true;
       try { child.kill('SIGKILL'); } catch { /* ignore */ }
@@ -485,26 +521,26 @@ export function runProcess(bin, args, { cwd, timeoutMs = 900_000, logPath, onLog
     child.stdout?.on('data', (buf) => {
       const s = buf.toString();
       stdout += s;
-      stream?.write(s);
+      stream?.write(mask(s));
       if (stdout.length > 2_000_000) stdout = stdout.slice(-1_000_000);
     });
     child.stderr?.on('data', (buf) => {
       const s = buf.toString();
       stderr += s;
-      stream?.write(s);
+      stream?.write(mask(s));
       if (stderr.length > 500_000) stderr = stderr.slice(-250_000);
     });
     child.on('error', (err) => {
       clearTimeout(timer);
       onLog?.('子进程启动失败', { bin, error: err.message });
       stream?.end();
-      resolve({ code: 127, stdout, stderr: stderr + '\n' + err.message, timedOut });
+      resolve({ code: 127, stdout: mask(stdout), stderr: mask(stderr) + '\n' + err.message, timedOut });
     });
     child.on('close', (code) => {
       clearTimeout(timer);
       stream?.end();
       onLog?.('子进程结束', { bin, code, timedOut });
-      resolve({ code: timedOut ? 124 : (code ?? 1), stdout, stderr, timedOut });
+      resolve({ code: timedOut ? 124 : (code ?? 1), stdout: mask(stdout), stderr: mask(stderr), timedOut });
     });
   });
 }

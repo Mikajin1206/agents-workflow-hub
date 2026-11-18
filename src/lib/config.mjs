@@ -37,7 +37,9 @@ export const DEFAULTS = {
     categories: [
       { id: 'delete_data', label: '删数据', keywords: ['删数据', '删除数据', '清空数据库', 'drop table', 'truncate', 'rm -rf', 'delete from'] },
       { id: 'stop_service', label: '停服', keywords: ['停服', '停止服务', '下线服务', 'shutdown', '停掉服务'] },
-      { id: 'spend_money', label: '花钱', keywords: ['花钱', '付费', '升级套餐', '购买', '充值', '订阅费', '升配'] },
+      // 2026-11-17 口径：花钱类只收「真支付动作」——讨论成本、询价、采购不算，
+      // 讨论语境的豁免在 approvals.mjs 的 moneyTalkExempt。
+      { id: 'spend_money', label: '花钱', keywords: ['花钱', '付费', '升级套餐', '购买', '充值', '订阅费', '升配', '续费', '下单', '扣费'] },
       { id: 'outbound_message', label: '对外发消息', keywords: ['对外发消息', '公开发布', '发公告', '群发', '对外通知', '发邮件给客户', '发推特', '发微博'] },
       { id: 'product_direction', label: '改产品方向', keywords: ['改产品方向', '调整产品方向', '砍掉功能', '产品定位'] },
       { id: 'secret_rotate', label: '新建或轮换密钥', keywords: ['轮换密钥', '新建密钥', '重置密钥', 'apikey', 'api key', 'token 轮换', '改密码'] },
@@ -57,7 +59,7 @@ export const DEFAULTS = {
     encryptKey: '',
     chatId: '',
   },
-  github: { webhookSecret: '', allowedRepos: [] },
+  github: { webhookSecret: '', allowedRepos: [], webhookUrl: '', webhookIds: {} },
   // 监控 webhook 的共享密钥。默认空 = 不校验（本地 127.0.0.1 够用）；
   // 一旦把 hub.host 改成局域网地址，这里必须填，否则同网段任何人都能伪造告警。
   monitor: { sharedSecret: '' },

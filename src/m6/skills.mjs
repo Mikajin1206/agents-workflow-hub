@@ -144,6 +144,12 @@ export function parseFrontMatter(raw) {
   return { ...fm, body };
 }
 
+/**
+ * 未配置中台令牌时，{{token}} 占位替换成的哨兵值。
+ * 日报 SOP 的鉴权兜底判据只认这个哨兵；导出常量让测试与调用方共用同一字面量。
+ */
+export const TOKEN_NOT_SET = '__TOKEN_NOT_SET__';
+
 /** 组装最终提示词：任务背景 + Skill 正文 + 决定记忆 + 指令模板 */
 export function buildPrompt({ task, skill, decisions, envelope, payload, hubUrl, token }) {
   // SOP 里可以用 {{hub}} / {{token}} 占位（"调 GET {{hub}}/api/stats，带头 x-hub-token: {{token}}"）。
@@ -151,11 +157,14 @@ export function buildPrompt({ task, skill, decisions, envelope, payload, hubUrl,
   // 实测 codex 因此输出了"做不了：无法确认 Hub 地址"。
   // {{token}} 是中台访问令牌（hub.secret）：中台配了真实密钥后 /api/* 全部 401，
   // 不注入的话日报这类要调 API 取数的 SOP 会在第一步就死掉（2026-11-17 战报实测）。
-  // 未配密钥（或仍是默认开发值）时调用方传空，占位保持原样——无密钥模式接口本就不设防。
+  // 未配密钥（或仍是默认开发值）时，{{token}} 替换成哨兵 __TOKEN_NOT_SET__，
+  // 不再保留字面占位符：日报 SOP 的兜底判据只认哨兵。旧写法「占位符原样出现=未配密钥」
+  // 有歧义——替换后提示词里依然有 token 字样（请求头名等正常文案），codex 按字面
+  // 误判「未配密钥」、主动省掉鉴权头，三个接口全 401（2026-11-18 战报实测）。
   const subst = (s) => {
     let out = String(s);
     if (hubUrl) out = out.replaceAll('{{hub}}', hubUrl);
-    if (token) out = out.replaceAll('{{token}}', token);
+    out = out.replaceAll('{{token}}', token || TOKEN_NOT_SET);
     return out;
   };
   const parts = [];
@@ -191,10 +200,19 @@ export function buildPrompt({ task, skill, decisions, envelope, payload, hubUrl,
     parts.push(subst(task.prompt));
   }
 
-  parts.push('', '## 输出要求');
-  parts.push('- 第一行给结论（做完了 / 需要批红 / 做不了）。');
-  parts.push('- 然后列 3~6 条要点：改了什么、跑了什么、结果如何。');
-  parts.push('- 代码类任务必须给出分支名与 PR 链接（如果已开）。');
-  parts.push('- 如果踩到必问清单（删数据/停服/花钱/对外发消息/改产品方向/密钥/权限），明确写「需要批红」并说明原因，不要擅自执行。');
+  // 汇报书写规范（2026-11-17 老板定）：汇报原样发到老板的飞书，老板不是程序员。
+  // 要求：命名好懂、确认事项与预期结果明确、少开发细节、少路径少符号、
+  // 语气明确、分行分序号、不复述规则。
+  parts.push('', '## 输出要求（这份汇报会原样发给老板；老板不是程序员）');
+  parts.push('- 第一行写结论：做完了 / 需要批红 / 做不了，三选一。');
+  parts.push('- 然后用 3~6 条要点说清：做了哪些事、结果怎样、核心思路是什么。每条独立一行，用 1. 2. 3. 编号。');
+  parts.push('- 事项命名让人一看就懂：说「清理了过期日志」，不说「清理 src/tmp/*.log」。');
+  parts.push('- 讲核心逻辑，不讲过程流水账：不列文件清单，不贴命令、代码、日志原文和长串路径。');
+  parts.push('- 确有必要提到的技术名词或位置，用「」或（）框起来，整份汇报最多一两处。');
+  parts.push('- 语言通俗通顺：请老板做事用祈使句，向老板提问用疑问句，说明情况用陈述句。');
+  parts.push('- 需要老板确认的事，单独一行「需要你确认：」，写清要确认什么、批准后会发生什么。');
+  parts.push('- 代码任务必须附 PR 链接（系统靠它走后续流程）；分支名、提交号这类细节不用写。');
+  parts.push('- 不复述「必问清单」「止步 PR」这类规则条文，做到即可；需要批红时直接写「需要批红：具体事项」。');
+  parts.push('- SOP 对产出格式另有规定的（如删除清单），按 SOP 来。');
   return parts.join('\n');
 }

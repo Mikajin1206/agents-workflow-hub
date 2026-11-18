@@ -326,8 +326,8 @@ async function main() {
       payload: { text: '现在的工作状态', chat_id: 'oc_test_chat' },
     }, 'test');
     await new Promise((r) => setTimeout(r, 60));
-    // r14 派给 codex，所以这里要声明 codex 才领得走（只声明 mock 会一直排队）
-    const pulled = await rh.queue.poll({ nodeId: 'win-a', engines: ['codex', 'mock'], waitSeconds: 2 });
+    // r14 现在派给 claude-code（rules.json 已改），这里要把 claude-code 声明上才领得走
+    const pulled = await rh.queue.poll({ nodeId: 'win-a', engines: ['claude-code', 'codex', 'mock'], waitSeconds: 2 });
     if (pulled) {
       rh.queue.complete(pulled.task_id, 'win-a', { ok: true, text: '中台在线，一切正常。', engine: 'mock' });
       await rh.afterTaskUpdate(pulled.task_id);
@@ -418,6 +418,8 @@ async function main() {
   });
   ok(prompt.includes('执行 SOP') && prompt.includes('止步于开 PR'), '提示词里装上 SOP 正文', prompt.slice(0, 80));
   ok(prompt.includes('已定过的事'), '提示词里装上决定记忆', prompt.includes('数据库只增不改'));
+  ok(prompt.includes('第一行写结论') && prompt.includes('需要你确认') && prompt.includes('不复述'),
+    '提示词带上「写给人看」的汇报规范（2026-11-17）');
 
   // 回归：SOP 里的 {{hub}} 必须换成真实地址，否则模型收到字面量会直接放弃
   const promptWithHub = hub.skills.buildPrompt({
@@ -444,7 +446,10 @@ async function main() {
   });
   ok(!promptWithToken.includes('{{token}}'), 'SOP 里的 {{token}} 占位被替换掉');
   ok(promptWithToken.includes('x-hub-token: e2e-test-token'), '替换成真实访问令牌', promptWithToken.slice(0, 120));
-  // 未配令牌（调用方传空）时保持字面量，不注入空值或默认开发值
+  // 未配令牌（调用方传空）时替换成哨兵 __TOKEN_NOT_SET__，不再保留字面占位符：
+  // 日报 SOP 的兜底判据只认哨兵。旧写法「占位符原样出现=未配密钥」有歧义——
+  // 替换后提示词里仍有 token 字样（请求头名等），codex 误判未配密钥、主动省掉
+  // 鉴权头，三个接口全 401（2026-11-18 战报实测）
   const promptNoToken = hub.skills.buildPrompt({
     task: { title: '出日报', prompt: '汇总一下' },
     skill: { name: 'daily-report', meta: { title: '每日战报' }, body: '带头 x-hub-token: {{token}} 调 {{hub}}/api/stats' },
@@ -453,7 +458,8 @@ async function main() {
     payload: {},
     hubUrl: 'http://127.0.0.1:8787',
   });
-  ok(promptNoToken.includes('{{token}}'), '未配令牌时 {{token}} 保持原样不注入');
+  ok(promptNoToken.includes('x-hub-token: __TOKEN_NOT_SET__'), '未配令牌时 {{token}} 替换成哨兵 __TOKEN_NOT_SET__');
+  ok(!promptNoToken.includes('{{token}}'), '占位符不再原样保留（消除「原样出现=未配密钥」的歧义判据）');
 
   /* ─────────── 10. 报告归档 ─────────── */
   section('M6 报告归档');
@@ -548,8 +554,8 @@ async function main() {
       workArgs);
     const reviewArgs = enginesMod.getEngine('claude-code')
       .buildArgs({ prompt: 'x', workdir: '.', mode: 'review' });
-    ok(reviewArgs.includes('plan') && !reviewArgs.includes('bypassPermissions'),
-      'claude 审查模式必须是 plan（只读），不能顺手带上干活权限',
+    ok(reviewArgs[reviewArgs.indexOf('--tools') + 1] === '' && !reviewArgs.includes('bypassPermissions'),
+      'claude 审查只读入 diff，关闭工具和干活权限',
       reviewArgs);
 
     // 坑 5（2026-11-14）：rules.json 改了不生效。RuleSet 只在 constructor 里

@@ -61,6 +61,8 @@
   },
   "github": {
     "webhookSecret": "",
+    "webhookUrl": "",
+    "webhookIds": {},
     "allowedRepos": [],
     "$allowedRepos_comment": "接真实仓库时把 owner/name 填进来，否则 GitHub webhook 会被 403 拒掉。示例：[\"your-name/your-repo\"]"
   },
@@ -69,11 +71,9 @@
     "mode": "mock",
     "autoStart": false,
     "reviewerEngine": "",
-    "releaseCommand": "npm run build",
+    "releaseCommand": "",
     "verifyCommand": "",
-    "expectedVersion": "",
-    "$defaultWorkdir_comment": "④发布、⑤核实、②检查都在这个目录里跑。不配就沿用触发时传的 workdir（通常是 /api/pipeline 的 workdir 参数）。",
-    "defaultWorkdir": ""
+    "expectedVersion": ""
   },
   "panel": {
     "enabled": true,
