@@ -144,6 +144,12 @@ export function parseFrontMatter(raw) {
   return { ...fm, body };
 }
 
+/**
+ * 未配置中台令牌时，{{token}} 占位替换成的哨兵值。
+ * 日报 SOP 的鉴权兜底判据只认这个哨兵；导出常量让测试与调用方共用同一字面量。
+ */
+export const TOKEN_NOT_SET = '__TOKEN_NOT_SET__';
+
 /** 组装最终提示词：任务背景 + Skill 正文 + 决定记忆 + 指令模板 */
 export function buildPrompt({ task, skill, decisions, envelope, payload, hubUrl, token }) {
   // SOP 里可以用 {{hub}} / {{token}} 占位（"调 GET {{hub}}/api/stats，带头 x-hub-token: {{token}}"）。
@@ -151,11 +157,14 @@ export function buildPrompt({ task, skill, decisions, envelope, payload, hubUrl,
   // 实测 codex 因此输出了"做不了：无法确认 Hub 地址"。
   // {{token}} 是中台访问令牌（hub.secret）：中台配了真实密钥后 /api/* 全部 401，
   // 不注入的话日报这类要调 API 取数的 SOP 会在第一步就死掉（2026-11-17 战报实测）。
-  // 未配密钥（或仍是默认开发值）时调用方传空，占位保持原样——无密钥模式接口本就不设防。
+  // 未配密钥（或仍是默认开发值）时，{{token}} 替换成哨兵 __TOKEN_NOT_SET__，
+  // 不再保留字面占位符：日报 SOP 的兜底判据只认哨兵。旧写法「占位符原样出现=未配密钥」
+  // 有歧义——替换后提示词里依然有 token 字样（请求头名等正常文案），codex 按字面
+  // 误判「未配密钥」、主动省掉鉴权头，三个接口全 401（2026-11-18 战报实测）。
   const subst = (s) => {
     let out = String(s);
     if (hubUrl) out = out.replaceAll('{{hub}}', hubUrl);
-    if (token) out = out.replaceAll('{{token}}', token);
+    out = out.replaceAll('{{token}}', token || TOKEN_NOT_SET);
     return out;
   };
   const parts = [];
