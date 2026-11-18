@@ -202,3 +202,114 @@ test('产出推给人之前过可读化：反引号与星号记号不出现（20
     assert.match(body, /「http:\/\/127\.0\.0\.1:8787」/, '行内代码换成「」');
   } finally { cleanup(); }
 });
+
+/* ─────────────────────────── 采纳执行优化（2026-11-18） ───────────────────────────
+ * 查询反馈卡「采纳」派出的任务（source=adopt）此前游离在会话之外：
+ * 任务说明塞整篇答复、回执走默认通道、命中必问清单时「批红卡 + 结果」连发两道。
+ * 现在与 dev 飞书答复同一套会话回执行为。 */
+
+/** 造一张查询反馈卡（proposal 走真实链路的 forHuman 整理），老板点「采纳」，返回派出的任务 */
+async function adoptQuerySuggestion(hub, { title, answer, chatId = 'oc_adopt' }) {
+  const { forHuman } = await import('../src/lib/human-text.mjs');
+  const card = await hub.approvals.create({
+    title,
+    question: '查询答复如下，请点按钮反馈（已阅 / 采纳 / 驳回 / 改派）：',
+    proposal: forHuman(answer),
+    category: 'query',
+    options: ['ack', 'adopt', 'reject', 'revise'],
+    chatId,
+  });
+  const res = await hub.approvals.decide(card.approval_id, { decision: 'adopt', by: 'boss' });
+  assert.equal(res.ok, true, '采纳决策成功');
+  const task = hub.ledger.get('SELECT * FROM tasks WHERE title=? ORDER BY created_at DESC LIMIT 1', `采纳执行：${title}`);
+  assert.ok(task, '采纳后派出了新任务');
+  return { card, task };
+}
+
+test('采纳派活：任务说明只带建议段与完成标准，不塞整篇答复；采纳会话记在任务上', async () => {
+  const { hub, cleanup } = await makeHub('adopt');
+  try {
+    const answer = [
+      '做完了（只读查询，未执行重推）。',
+      '',
+      '「问题理解」',
+      '老板想把今天的战报重推一次。',
+      '',
+      '「问题分析」',
+      '早上那份战报因接口 401 没有任何数字。',
+      '',
+      '「下一步的执行建议」',
+      '1. 修复日报鉴权兜底判据。',
+      '2. 修完后重启中台加载新代码（需要批红：重启属短暂停服）。',
+    ].join('\n');
+    const { task } = await adoptQuerySuggestion(hub, { title: '重新推日报', answer });
+    assert.match(task.prompt, /采纳执行.*任务：/, '开头一句话讲清这是什么任务');
+    assert.match(task.prompt, /1\. 修复日报鉴权兜底判据/, '要执行的建议在任务说明里');
+    assert.doesNotMatch(task.prompt, /问题理解|401/, '理解与分析不再塞进任务（只派建议段）');
+    assert.match(task.prompt, /完成标准/, '写明做完的标准');
+    assert.match(task.prompt, /需要批红/, '铁律保留');
+    assert.match(task.title, /^采纳执行：重新推日报$/, '事项名 = 采纳执行 + 原查询');
+    const meta = JSON.parse(task.meta);
+    assert.equal(meta.envelope.feishu_chat, 'oc_adopt', '采纳发生的会话记在任务上，回执能送回去');
+  } finally { cleanup(); }
+});
+
+test('采纳的任务命中必问清单：结果与批红并一张卡回原会话，不再连发两道', async () => {
+  const { hub, cleanup } = await makeHub('adopt-esc');
+  try {
+    const answer = '「下一步的执行建议」\n1. 重启中台加载新代码（需要批红：重启属短暂停服）。';
+    await adoptQuerySuggestion(hub, { title: '重启中台', answer });
+    const before = new Set(hub.ledger.all('SELECT notification_id n FROM notifications').map((r) => r.n));
+    const t = await hub.queue.poll({ nodeId: 'win-a', engines: ['claude-code', 'mock'], waitSeconds: 2 });
+    assert.ok(t, '采纳的任务能被领走');
+    hub.queue.complete(t.task_id, 'win-a', { ok: true, text: '做完了：中台已重启加载新代码。需要批红：生效要停服务 3 分钟。', engine: 'mock' });
+    await hub.afterTaskUpdate(t.task_id);
+    const added = hub.ledger.all('SELECT * FROM notifications').filter((r) => !before.has(r.notification_id));
+    assert.equal(added.length, 1, `应只推一张合并卡，实际 ${added.length} 条：${JSON.stringify(added.map((r) => [r.kind, r.title]))}`);
+    assert.equal(added[0].kind, 'approval', '合并卡带批红按钮');
+    assert.match(added[0].title, /采纳执行：重启中台/, '标题就是事项名');
+    assert.match(added[0].body, /中台已重启/, '答复正文在上');
+    assert.match(added[0].body, /待批红/, '批红信息在下');
+    const ticket = hub.ledger.get('SELECT * FROM approvals WHERE task_id=?', t.task_id);
+    assert.ok(ticket, '票拟单照常落库');
+    assert.equal(ticket.status, 'pending');
+    assert.equal(JSON.parse(added[0].ref).approval_id, ticket.approval_id, '推送挂的就是这张票拟');
+  } finally { cleanup(); }
+});
+
+test('采纳的任务正常完成：结果作为回话回到采纳的会话，不变成无主推送', async () => {
+  const { hub, cleanup } = await makeHub('adopt-clean');
+  try {
+    const answer = '「下一步的执行建议」\n1. 把示例配置里的端口改成 9000。';
+    await adoptQuerySuggestion(hub, { title: '改示例端口', answer });
+    const before = new Set(hub.ledger.all('SELECT notification_id n FROM notifications').map((r) => r.n));
+    const t = await hub.queue.poll({ nodeId: 'win-a', engines: ['claude-code', 'mock'], waitSeconds: 2 });
+    assert.ok(t, '采纳的任务能被领走');
+    hub.queue.complete(t.task_id, 'win-a', { ok: true, text: '完成：示例端口已改为 9000。', engine: 'mock' });
+    await hub.afterTaskUpdate(t.task_id);
+    const added = hub.ledger.all('SELECT * FROM notifications').filter((r) => !before.has(r.notification_id));
+    assert.equal(added.length, 1, `只推一条回话，实际 ${added.length} 条`);
+    assert.equal(added[0].kind, 'feishu_reply', '作为回话送回会话（不再是默认通道的 task_result）');
+    assert.match(added[0].title, /采纳执行：改示例端口/, '标题就是事项名');
+    assert.match(added[0].body, /示例端口已改为 9000/, '结果正文照常');
+  } finally { cleanup(); }
+});
+
+test('采纳的任务失败：失败回话与批红并一张卡回到采纳的会话（与 dev 失败同路）', async () => {
+  const { hub, cleanup } = await makeHub('adopt-fail');
+  try {
+    const answer = '「下一步的执行建议」\n1. 重启中台加载新代码。';
+    await adoptQuerySuggestion(hub, { title: '重启中台', answer });
+    const before = new Set(hub.ledger.all('SELECT notification_id n FROM notifications').map((r) => r.n));
+    const t = await hub.queue.poll({ nodeId: 'win-a', engines: ['claude-code', 'mock'], waitSeconds: 2 });
+    assert.ok(t, '采纳的任务能被领走');
+    hub.queue.complete(t.task_id, 'win-a', { ok: false, error: '重启时要停服务 3 分钟，中途失败退出', engine: 'mock' });
+    await hub.afterTaskUpdate(t.task_id);
+    const added = hub.ledger.all('SELECT * FROM notifications').filter((r) => !before.has(r.notification_id));
+    assert.equal(added.length, 1, `失败只推一条，实际 ${added.length} 条：${JSON.stringify(added.map((r) => [r.kind, r.title]))}`);
+    assert.equal(added[0].kind, 'approval', '失败回话与批红并一张卡');
+    assert.match(added[0].body, /执行失败/, '失败说明在上');
+    assert.match(added[0].body, /原因：（重启时要停服务 3 分钟，中途失败退出）/, '原始报错压成一行、收进括号');
+    assert.match(added[0].body, /待批红/, '批红信息在下');
+  } finally { cleanup(); }
+});

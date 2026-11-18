@@ -2,10 +2,12 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { loadConfig, nowIso } from './lib/config.mjs';
 import { Router, createCtx, readBody, parseBody, verifyHmacSha256, serveStatic } from './lib/http.mjs';
 import { Hub } from './hub.mjs';
 import { parseCron } from './lib/cron.mjs';
+import { GitHubWebhookManager } from './m1/github-webhooks.mjs';
 import {
   SOURCES, EVENT_TYPES, PRIORITIES, APPROVAL_MODES, ACTIONS, CRON_PRESETS,
 } from './lib/catalog.mjs';
@@ -22,7 +24,16 @@ import {
 const cfg = loadConfig();
 const hub = new Hub({ config: cfg });
 const router = new Router();
+const githubWebhookManager = new GitHubWebhookManager({ config: cfg });
 const startedAt = nowIso();
+const gitOptions = { cwd: cfg.paths.root, encoding: 'utf8', timeout: 3000, windowsHide: true };
+const revision = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], gitOptions);
+const trackedChanges = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], gitOptions);
+const startupVersion = {
+  commit: revision.status === 0 ? revision.stdout.trim() : null,
+  clean: trackedChanges.status === 0 && trackedChanges.stdout.trim() === '',
+  started_at: startedAt,
+};
 
 /* ────────────────────────── 鉴权（轻量） ────────────────────────── */
 
@@ -56,6 +67,11 @@ router.get('/static/*', (ctx) => {
 });
 
 /* ────────────────────────── 健康与总览 ────────────────────────── */
+
+router.get('/api/version', (ctx) => {
+  if (!guard(ctx)) return;
+  ctx.json(startupVersion);
+});
 
 router.get('/api/health', (ctx) => {
   ctx.json({
@@ -103,13 +119,22 @@ router.get('/api/pipeline/:id', (ctx) => {
   if (!guard(ctx)) return;
   const rows = hub.ledger.all('SELECT * FROM pipeline_runs WHERE pipeline_id=? ORDER BY seq', ctx.params.id);
   if (!rows.length) return ctx.error('流水线不存在', 404);
-  ctx.json({ ok: true, pipeline_id: ctx.params.id, steps: rows });
+  const creation = hub.ledger.get(
+    "SELECT detail FROM event_audit WHERE entity='pipeline' AND entity_id=? AND to_status='running' ORDER BY audit_id LIMIT 1",
+    ctx.params.id,
+  );
+  const owner = safeJson(creation?.detail, {})?.controllerPid;
+  let active = hub.pipeline.active.has(ctx.params.id);
+  if (!active && Number.isSafeInteger(owner) && owner > 0) {
+    try { process.kill(owner, 0); active = true; } catch { /* 独立进程已退出 */ }
+  }
+  ctx.json({ ok: true, pipeline_id: ctx.params.id, active, steps: rows });
 });
 
 /**
  * 手动触发一次流水线。
  * autoStart=false 时这是唯一入口；面板上的「进流水线」按钮走这里。
- * 不给 release/verify 配置就会在④⑤如实报错，不会假装成功。
+ * 发布和核实命令由各自的步骤检查。
  */
 router.post('/api/pipeline', async (ctx) => {
   if (!guard(ctx)) return;
@@ -134,7 +159,7 @@ router.post('/api/pipeline', async (ctx) => {
       prUrl,
       taskId: b.task_id || null,
       engine: b.engine || 'codex',
-      options: { workdir: b.workdir, skip: Array.isArray(b.skip) ? b.skip : undefined },
+      options: { skip: Array.isArray(b.skip) ? b.skip : undefined },
     })
     .catch((err) => hub.log.error('流水线异常', { pipeline: pipelineId, error: err.message }));
   ctx.json({ ok: true, pipeline_id: pipelineId, status: 'started' });
@@ -155,6 +180,33 @@ router.get('/api/rules', (ctx) => {
       schedule: r.raw?.schedule || null,
     })),
   });
+});
+
+router.get('/api/github/repos', async (ctx) => {
+  if (!guard(ctx)) return;
+  try {
+    ctx.json({ ok: true, ...(await githubWebhookManager.list()) });
+  } catch (err) {
+    ctx.error(err.message, err.status || 500);
+  }
+});
+
+router.post('/api/github/repos', async (ctx) => {
+  if (!guard(ctx)) return;
+  try {
+    ctx.json({ ok: true, ...(await githubWebhookManager.add(ctx.body?.repo)) }, 201);
+  } catch (err) {
+    ctx.error(err.message, err.status || 500);
+  }
+});
+
+router.delete('/api/github/repos', async (ctx) => {
+  if (!guard(ctx)) return;
+  try {
+    ctx.json({ ok: true, ...(await githubWebhookManager.remove(ctx.body?.repo)) });
+  } catch (err) {
+    ctx.error(err.message, err.status || 500);
+  }
 });
 
 /**
@@ -546,6 +598,7 @@ router.post('/webhook/github', async (ctx) => {
   }
   try {
     const env = hub.webhooks.github(ctx.headers, ctx.body);
+    if (!env) return ctx.json({ ok: true, ignored: true, event: 'ping' });
     const res = await hub.ingestAsync(env, 'github-webhook');
     ctx.json({ ok: true, ...res });
   } catch (err) {
@@ -617,7 +670,9 @@ async function handleFeishuCallback(body) {
         decision: action, note: '（飞书卡片）', by: env.payload.operator || 'feishu',
       });
       if (res.ok) {
-        const labels = { agree: '已批红', adopt: '已采纳，任务已派出', ack: '已阅（问题已记录）', reject: '已驳回', revise: '已转改派' };
+        // 采纳的回执写明预期结果（2026-11-18 汇报规范：需要知道「之后会发生什么」）：
+        // 任务已派出，做完会自动回到这个会话汇报。
+        const labels = { agree: '已批红', adopt: '已采纳，任务已派出（完成后自动汇报）', ack: '已阅（问题已记录）', reject: '已驳回', revise: '已转改派' };
         const label = labels[action] || '已处理';
         return { ok: true, toast: { type: 'info', content: `${label}：${res.approval?.title || ''}` } };
       }
@@ -670,7 +725,7 @@ const server = http.createServer(async (req, res) => {
 
   // 中间件：读 body
   try {
-    if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       ctx.rawBody = await readBody(req);
       ctx.body = parseBody(ctx.rawBody, req.headers['content-type']);
     }

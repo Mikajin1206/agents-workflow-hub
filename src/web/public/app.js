@@ -17,6 +17,7 @@ const state = {
   skills: [],
   timers: [],
   nodes: [],
+  github: { available: [], monitored: [], account: '', events: [], webhook_url: '' },
   /* 运行时长走本地时钟：每 8 秒一次的快照会让数字停住不动，
      看起来像坏了。这里只记服务端给的那一刻，之后自己每秒往上走。 */
   uptimeAt: 0,
@@ -277,6 +278,59 @@ function render() {
   renderRules();
   renderEngines();
   renderDispatchOptions();
+  renderGithubRepos();
+}
+
+async function loadGithubRepos() {
+  $('#gh-status').innerHTML = '<div class="banner info">正在读取 GitHub 仓库与 webhook 状态…</div>';
+  try {
+    state.github = await api('/api/github/repos');
+    renderGithubRepos();
+  } catch (err) {
+    $('#gh-status').innerHTML = `<div class="banner warn">${esc(err.message)}</div>`;
+  }
+}
+
+function renderGithubRepos() {
+  if (!$('#gh-repo-select')) return;
+  const selected = new Set((state.github.monitored || []).map((r) => r.repo.toLowerCase()));
+  const available = (state.github.available || []).filter((r) => !selected.has(r.full_name.toLowerCase()));
+  $('#gh-repo-select').innerHTML = available.length
+    ? available.map((r) => `<option value="${esc(r.full_name)}">${esc(r.full_name)}${r.private ? ' · 私有' : ''}</option>`).join('')
+    : '<option value="">没有可添加的仓库</option>';
+  $('#gh-managed-table').innerHTML = table([
+    { label: '仓库', key: 'repo', cls: 'mono' },
+    { label: 'Webhook', render: (r) => r.hook_active ? badge('active') : `<span class="badge warn">${r.hook_found ? '已停用' : '未找到'}</span>` },
+    { label: 'Hook ID', render: (r) => `<span class="muted mono">${esc(r.hook_id || '-')}</span>` },
+    { label: '操作', render: (r) => `<button class="btn danger sm" data-gh-remove="${esc(r.repo)}">移除</button>` },
+  ], state.github.monitored || [], { empty: '还没有添加 GitHub 仓库' });
+  $$('[data-gh-remove]').forEach((button) => button.addEventListener('click', async () => {
+    const repo = button.dataset.ghRemove;
+    if (!window.confirm(`从检测范围移除 ${repo}，并删除本服务管理的 GitHub webhook？`)) return;
+    await changeGithubRepo('remove', repo, button);
+  }));
+  if (state.github.account) {
+    const eventNames = (state.github.events || []).join('、');
+    $('#gh-status').innerHTML = `<div class="banner ok">GitHub 已连接：${esc(state.github.account)}。当前订阅 ${esc(eventNames)}。</div>`;
+  }
+}
+
+async function changeGithubRepo(action, repo, button) {
+  if (!repo) return toast('先选择或输入仓库 owner/name', true);
+  if (button) button.disabled = true;
+  try {
+    const result = await api('/api/github/repos', {
+      method: action === 'add' ? 'POST' : 'DELETE',
+      body: { repo },
+    });
+    toast(action === 'add' ? `已添加 ${result.repo}` : `已移除 ${result.repo}`);
+    if (action === 'add') $('#gh-repo-manual').value = '';
+    await loadGithubRepos();
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 /* ── 总览 ── */
@@ -522,8 +576,9 @@ function renderPipeline() {
         : '五步会真的合并 PR、执行发布命令。'}
       ${meta.auto_start ? ' · 代码任务开出 PR 后会自动进入流水线。' : ' · 自动启动已关闭，只能从这里手动触发。'}
       ${meta.reviewer_engine ? ` · 审查引擎指定为 ${esc(meta.reviewer_engine)}。` : ''}
-      ${!meta.release_configured || !meta.verify_configured
-        ? ' · <b>发布/核实命令未配置</b>，真跑时④⑤会如实报错。' : ''}
+      ${!isDry && !meta.release_configured ? ' · <b>发布命令未配置</b>，合并成功后会停在发布步骤。' : ''}
+      ${!isDry && meta.release_configured && !meta.verify_configured
+        ? ' · <b>核实命令未配置</b>，发布成功后会停在核实步骤。' : ''}
     </div>`;
   }
   if (!runs.length) {
@@ -1315,12 +1370,17 @@ function switchView(name) {
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
   $('#main').scrollTop = 0;
   location.hash = name;
+  if (name === 'github') loadGithubRepos();
 }
 
 function bind() {
   $$('.nav button').forEach((b) => b.addEventListener('click', () => switchView(b.dataset.view)));
   $('#btn-refresh').addEventListener('click', () => { toast('刷新中'); loadAll(); });
   $('#task-filter').addEventListener('change', renderTasks);
+  $('#gh-add-selected').addEventListener('click', () => changeGithubRepo('add', $('#gh-repo-select').value, $('#gh-add-selected')));
+  $('#gh-add-manual').addEventListener('click', () => changeGithubRepo('add', $('#gh-repo-manual').value.trim(), $('#gh-add-manual')));
+  $('#gh-repo-manual').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#gh-add-manual').click(); });
+  $('#gh-refresh').addEventListener('click', loadGithubRepos);
   $('#drawer-close').addEventListener('click', closeDrawer);
   $('#drawer-wrap').addEventListener('click', (e) => { if (e.target.id === 'drawer-wrap') closeDrawer(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });

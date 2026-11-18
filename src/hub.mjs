@@ -15,7 +15,7 @@ import { WebhookAdapter } from './m1/webhook-adapter.mjs';
 import { Pipeline, createRunner } from './m4/pipeline.mjs';
 import { listEngines } from './m3/engines.mjs';
 import { newTaskId } from './lib/ids.mjs';
-import { forHuman, errorOneLine } from './lib/human-text.mjs';
+import { forHuman, errorOneLine, suggestionsFromQueryAnswer } from './lib/human-text.mjs';
 
 /**
  * 中台装配（方案 §4 六模块接线）。
@@ -101,6 +101,11 @@ export class Hub {
 
     // 查询反馈被「采纳」：把答复里的执行建议派成新任务去执行（2026-11-17 分类口径）。
     // 铁律不变——任务照常受必问清单与止步 PR 约束，采纳只是替老板点了个「开工」。
+    // 任务说明按「采纳执行优化」重写（2026-11-18，参考 2026-11-17 汇报规范同一条老板决定）：
+    // 只带「要执行的建议」段与完成标准，不再把整篇答复（理解/分析）塞给执行者；
+    // 反馈卡所在的飞书会话随票拟单带来（meta.chat_id → envelope.feishu_chat），
+    // 结果、失败、待批红都作为「回话」送回采纳发生的那个会话，且与 dev 答复
+    // 一样走「答复 + 批红并一张卡」，不再连发两道。
     this.approvals.onAdopt = async ({ approval, by }) => {
       const res = await this.dispatchManual({
         type: 'cmd.manual',
@@ -109,14 +114,8 @@ export class Hub {
         priority: 'P1',
         node: 'win-a',
         engine: 'claude-code',
-        prompt: [
-          `老板已采纳一条查询答复里的执行建议，请按建议执行。`,
-          `原查询：${approval.title}`,
-          '',
-          approval.proposal || approval.question || '',
-          '',
-          '铁律照旧：不询问不等待；代码类止步于提交 + 开 PR；碰到必问清单（删数据/停服/花钱/对外发消息/改方向/密钥/权限）停下来写「需要批红」。',
-        ].join('\n'),
+        replyChatId: approval.meta?.chat_id || null,
+        prompt: buildAdoptPrompt({ title: approval.title, answer: approval.proposal || approval.question || '' }),
       });
       this.log.info('已采纳查询建议，派后续任务', { approval: approval.approval_id, task: res.task_id, by });
       return res;
@@ -173,9 +172,8 @@ export class Hub {
       await this.#deliverResult(task, escalated);
     } else if (task.status === 'failed') {
       this.events.updateEventStatus(task.event_id, EVENT_STATUS.FAILED, { task: taskId, error: task.error });
-      const envelope = task.meta?.envelope || {};
-      const isFeishuReply = envelope.source === 'feishu';
-      const replyChatId = isFeishuReply ? (task.meta?.payload?.chat_id || null) : null;
+      const isFeishuReply = this.#isFeishuConversation(task);
+      const replyChatId = isFeishuReply ? this.#replyChatIdOf(task) : null;
       const ask = this.approvals.classify(`${task.title} ${task.error || ''}`);
       // 提问失败也要回话：否则人只看到「任务失败」的台账记录，不知道为什么。
       // 命中必问清单时不再「失败通知 + 批红卡」连发两道：票拟只建单不推卡，
@@ -234,8 +232,7 @@ export class Hub {
     } else if (task.status === 'dead_letter') {
       this.events.updateEventStatus(task.event_id, EVENT_STATUS.DEAD_LETTER, { task: taskId, error: task.error });
       this.log.error('任务进入死信', { task: taskId, error: task.error });
-      const envelope = task.meta?.envelope || {};
-      const isFeishuReply = envelope.source === 'feishu';
+      const isFeishuReply = this.#isFeishuConversation(task);
       await this.notifier.notify({
         level: 'P1',
         kind: isFeishuReply ? 'feishu_reply' : 'dead_letter',
@@ -243,7 +240,7 @@ export class Hub {
         body: `这件事重试了 ${task.attempts} 次还是没做成，已暂停等你处理。\n原因：（${errorOneLine(task.error, 200)}）`,
         ref: taskId,
         dedupeRef: `dead_letter:${taskId}`,
-        chatId: isFeishuReply ? (task.meta?.payload?.chat_id || null) : null,
+        chatId: isFeishuReply ? this.#replyChatIdOf(task) : null,
       });
     }
     return task;
@@ -339,8 +336,7 @@ export class Hub {
     // 飞书答复：票拟只建单不推卡（push:false），待批红信息由 #deliverResult
     // 并入答复一次推送 —— 不再「票拟卡 + 答复文本」连发两道（2026-11-17 修「dev 双推」）。
     // 非飞书来源（战报/巡检这类）没有「连发两道」问题，票拟照旧单独推卡。
-    const envelope = task.meta?.envelope || {};
-    const isFeishuReply = envelope.source === 'feishu';
+    const isFeishuReply = this.#isFeishuConversation(task);
     return await this.approvals.create({
       title: `执行结果涉及「${cat?.label || hits[0]}」：${task.title}`,
       question: `任务已完成分析，但其结果涉及「${cat?.label || hits[0]}」。是否准予继续执行这一步？`,
@@ -364,9 +360,9 @@ export class Hub {
     // 飞书消息是「有人问我话」，产出是回答，不是系统主动打扰。
     // 回答必须回到提问的那个会话 —— 否则人在群里问了「现在的工作状态」，
     // 看见任务跑完，却永远等不到答案（silent:true 会直接把回答吞掉）。
-    const envelope = task.meta?.envelope || {};
-    const isFeishuReply = envelope.source === 'feishu';
-    const replyChatId = isFeishuReply ? (task.meta?.payload?.chat_id || null) : null;
+    // 查询反馈卡「采纳」派的任务也算会话内（feishu_chat 记着采纳发生的会话）。
+    const isFeishuReply = this.#isFeishuConversation(task);
+    const replyChatId = isFeishuReply ? this.#replyChatIdOf(task) : null;
 
     if (task.meta?.silent !== false && !isFeishuReply) return;  // 静默任务：只写台账
     const text = task.result?.text || '';
@@ -459,7 +455,7 @@ export class Hub {
   }
 
   /** 手动/定时派活（不经规则，直接指定引擎，用于面板与 CLI） */
-  async dispatchManual({ type = 'cmd.manual', target, summary, payload = {}, node, engine, model, skill, prompt, workdir, priority = 'P2', source = 'cli', approvalRequired }) {
+  async dispatchManual({ type = 'cmd.manual', target, summary, payload = {}, node, engine, model, skill, prompt, workdir, priority = 'P2', source = 'cli', approvalRequired, replyChatId }) {
     // 明确指定了引擎 → 跳过规则匹配，直接建任务；否则走规则
     const explicit = Boolean(engine);
     const env = await this.ingestAsync({
@@ -469,13 +465,13 @@ export class Hub {
     }, source, { noRoute: explicit });
     if (env.unrouted || env.duplicate) {
       // 规则没覆盖 / 明确指定引擎 → 直接建任务（面板手填的场景）
-      const taskId = this.#createAdhocTask({ type, target, summary, payload, node, engine, model, skill, prompt, workdir, priority, source, eventId: env.event_id, approvalRequired });
+      const taskId = this.#createAdhocTask({ type, target, summary, payload, node, engine, model, skill, prompt, workdir, priority, source, eventId: env.event_id, approvalRequired, replyChatId });
       return { ok: true, event_id: env.event_id, task_id: taskId, adhoc: true };
     }
     return { ok: true, event_id: env.event_id, task_id: env.task?.task_id, status: env.status };
   }
 
-  #createAdhocTask({ type, target, summary, payload, node, engine, model, skill, prompt, workdir, priority, source, eventId, approvalRequired }) {
+  #createAdhocTask({ type, target, summary, payload, node, engine, model, skill, prompt, workdir, priority, source, eventId, approvalRequired, replyChatId }) {
     const id = newTaskId();
     const now = nowIso();
     const status = approvalRequired ? 'awaiting_approval' : 'queued';
@@ -484,12 +480,35 @@ export class Hub {
        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id, eventId, 'adhoc', summary || `${type}`, node || 'any', engine || 'mock', model || null,
       skill || null, prompt || '', status, priority, 0, 3, `adhoc:${id}`, workdir || this.config.paths.root, now, now,
-      JSON.stringify({ rule_id: 'adhoc', silent: false, limits: { max_parallel: 3, timeout_seconds: 900 }, envelope: { source, type, target, priority }, payload }),
+      // replyChatId：任务来自哪个飞书会话（查询反馈卡「采纳」派的任务）。
+      // 收尾回话、失败回话、待批红合并卡都靠它回到原会话（见 #isFeishuConversation）。
+      JSON.stringify({
+        rule_id: 'adhoc', silent: false, limits: { max_parallel: 3, timeout_seconds: 900 },
+        envelope: { source, type, target, priority, ...(replyChatId ? { feishu_chat: replyChatId } : {}) },
+        payload,
+      }),
     );
     this.ledger.run(`UPDATE events SET status=?, rule_id='adhoc', updated_at=? WHERE event_id=?`, status === 'queued' ? 'routed' : 'awaiting_approval', now, eventId);
     this.ledger.audit({ entity: 'task', entityId: id, toStatus: status, actor: source || 'cli', detail: { adhoc: true, engine, node } });
     if (status === 'queued') this.queue.wakeAll();
     return id;
+  }
+
+  /**
+   * 这个任务的对话发生在飞书上吗？（产出、失败、待批红要作为「回话」送回原会话）
+   * 两类算数：飞书消息直接派生的任务（envelope.source='feishu'）；
+   * 查询反馈卡「采纳」派出的任务（envelope.feishu_chat 记着采纳发生的会话，
+   * 之前这类任务的回执走默认通道，老板在会话里等不到结果）。
+   */
+  #isFeishuConversation(task) {
+    const envelope = task.meta?.envelope || {};
+    return envelope.source === 'feishu' || Boolean(envelope.feishu_chat);
+  }
+
+  /** 回话该送到哪个飞书会话：采纳任务记在 envelope，飞书消息任务记在 payload.chat_id */
+  #replyChatIdOf(task) {
+    const envelope = task.meta?.envelope || {};
+    return envelope.feishu_chat || task.meta?.payload?.chat_id || null;
   }
 
   /** 面板/接口用的一次性快照 */
@@ -531,4 +550,32 @@ export class Hub {
   stats({ since, until } = {}) {
     return ledgerReport({ ledger: this.ledger, since, until });
   }
+}
+
+/**
+ * 组装「采纳执行」任务的说明（2026-11-18，参考 2026-11-17 汇报规范的同一决定）。
+ *
+ * 之前是把整篇查询答复（问题理解/问题分析/执行建议）原样塞给执行者，
+ * 只补一句「请按建议执行」——执行者拿不到明确的目标与完成标准，
+ * 实测会把「按建议重推日报」跑成「把日报机制重新调查一遍」。
+ * 现在只给三样东西：原始查询一句话背景、要执行的建议段、完成标准与铁律。
+ * 汇报格式不用这里重复——buildPrompt 会在后面统一追加「输出要求」。
+ */
+export function buildAdoptPrompt({ title, answer }) {
+  const suggestions = suggestionsFromQueryAnswer(answer);
+  return [
+    '这是「采纳执行」任务：老板已采纳一条查询答复里的执行建议，现在把建议做完——不是重新回答问题，也不需要再给新建议。',
+    '',
+    '## 老板的原始查询',
+    String(title || '').trim() || '（未记录）',
+    '',
+    '## 要执行的建议（逐条落地，按顺序做）',
+    suggestions || '（答复里没有单独的建议段，从全文里找建议部分执行）',
+    '',
+    '## 完成标准',
+    '- 建议里的每一条都要有交代：做成了，或说清为什么做不了，不笼统带过。',
+    '- 铁律不变：不询问不等待；代码类止步于「提交 + 开 PR」，不合并主干；碰到必问清单（删数据/停服/花钱/对外发消息/改方向/密钥/权限）停下来，写「需要批红：具体事项」。',
+    '- 建议里已写明「需要批红」的动作，做到那一步前停下等批红，不要跳过。',
+    '- 汇报按下方「输出要求」写：这份汇报会原样发给老板。',
+  ].join('\n');
 }

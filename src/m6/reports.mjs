@@ -16,6 +16,15 @@ export class ReportStore {
   }
 
   save({ kind = 'report', title, body, taskId = null, eventId = null, meta = {} }) {
+    const normalizedBody = String(body || '').trim();
+    if (kind === 'task_output' && taskId) {
+      const candidates = this.ledger.all(
+        'SELECT report_id, path FROM reports WHERE kind=? AND task_id=? ORDER BY created_at, report_id',
+        kind, taskId,
+      );
+      const existing = candidates.find((row) => readTaskOutput(row.path) === normalizedBody);
+      if (existing) return existing;
+    }
     const id = newReportId();
     const now = new Date();
     const day = now.toISOString().slice(0, 10);
@@ -33,7 +42,7 @@ export class ReportStore {
       '',
       '---',
       '',
-      String(body || '').trim(),
+      normalizedBody,
       '',
     ].filter((l) => l !== null).join('\n');
     fs.writeFileSync(file, content, 'utf8');
@@ -47,10 +56,30 @@ export class ReportStore {
 
   list({ kind, limit = 30 } = {}) {
     const sql = kind
-      ? `SELECT * FROM reports WHERE kind=? ORDER BY created_at DESC LIMIT ?`
-      : `SELECT * FROM reports ORDER BY created_at DESC LIMIT ?`;
-    const args = kind ? [kind, limit] : [limit];
-    return this.ledger.all(sql, ...args).map((r) => ({
+      ? `SELECT * FROM reports WHERE kind=? ORDER BY created_at DESC, report_id DESC LIMIT ? OFFSET ?`
+      : `SELECT * FROM reports ORDER BY created_at DESC, report_id DESC LIMIT ? OFFSET ?`;
+    const args = kind ? [kind] : [];
+    const rows = [];
+    const seen = new Map();
+    const pageSize = 100;
+    for (let offset = 0; rows.length < limit; offset += pageSize) {
+      const page = this.ledger.all(sql, ...args, pageSize, offset);
+      for (const row of page) {
+        if (row.kind === 'task_output' && row.task_id) {
+          const body = readTaskOutput(row.path);
+          if (body !== null) {
+            if (!seen.has(row.task_id)) seen.set(row.task_id, new Set());
+            const bodies = seen.get(row.task_id);
+            if (bodies.has(body)) continue;
+            bodies.add(body);
+          }
+        }
+        rows.push(row);
+        if (rows.length >= limit) break;
+      }
+      if (page.length < pageSize) break;
+    }
+    return rows.map((r) => ({
       report_id: r.report_id, kind: r.kind, title: r.title, path: r.path,
       task_id: r.task_id, event_id: r.event_id, created_at: r.created_at,
     }));
@@ -69,6 +98,16 @@ export class ReportStore {
       ? this.ledger.get('SELECT * FROM reports WHERE kind=? ORDER BY created_at DESC LIMIT 1', kind)
       : this.ledger.get('SELECT * FROM reports ORDER BY created_at DESC LIMIT 1');
     return row || null;
+  }
+}
+
+function readTaskOutput(file) {
+  try {
+    const content = fs.readFileSync(file, 'utf8');
+    const separator = /\r?\n---\r?\n\r?\n/.exec(content);
+    return separator ? content.slice(separator.index + separator[0].length).trim() : null;
+  } catch {
+    return null;
   }
 }
 

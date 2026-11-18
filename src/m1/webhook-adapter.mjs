@@ -18,9 +18,13 @@ export class WebhookAdapter {
     const repo = body?.repository?.full_name || body?.repository?.name || null;
 
     const allowed = this.config.github.allowedRepos || [];
-    if (allowed.length && repo && !allowed.includes(repo)) {
+    if (!repo || !allowed.includes(repo)) {
       throw Object.assign(new Error(`仓库 ${repo} 不在 allowlist 内`), { code: 'REPO_NOT_ALLOWED' });
     }
+
+    // GitHub 创建 webhook 后会发送 ping。它只用于确认 hook 可达，
+    // 不应被当成业务事件入账或路由。
+    if (event === 'ping') return null;
 
     if (event === 'issues' && body?.action === 'opened') {
       const issue = body.issue || {};
