@@ -6,6 +6,7 @@ import { loadConfig, nowIso } from './lib/config.mjs';
 import { Router, createCtx, readBody, parseBody, verifyHmacSha256, serveStatic } from './lib/http.mjs';
 import { Hub } from './hub.mjs';
 import { parseCron } from './lib/cron.mjs';
+import { GitHubWebhookManager } from './m1/github-webhooks.mjs';
 import {
   SOURCES, EVENT_TYPES, PRIORITIES, APPROVAL_MODES, ACTIONS, CRON_PRESETS,
 } from './lib/catalog.mjs';
@@ -22,6 +23,7 @@ import {
 const cfg = loadConfig();
 const hub = new Hub({ config: cfg });
 const router = new Router();
+const githubWebhookManager = new GitHubWebhookManager({ config: cfg });
 const startedAt = nowIso();
 
 /* ────────────────────────── 鉴权（轻量） ────────────────────────── */
@@ -155,6 +157,33 @@ router.get('/api/rules', (ctx) => {
       schedule: r.raw?.schedule || null,
     })),
   });
+});
+
+router.get('/api/github/repos', async (ctx) => {
+  if (!guard(ctx)) return;
+  try {
+    ctx.json({ ok: true, ...(await githubWebhookManager.list()) });
+  } catch (err) {
+    ctx.error(err.message, err.status || 500);
+  }
+});
+
+router.post('/api/github/repos', async (ctx) => {
+  if (!guard(ctx)) return;
+  try {
+    ctx.json({ ok: true, ...(await githubWebhookManager.add(ctx.body?.repo)) }, 201);
+  } catch (err) {
+    ctx.error(err.message, err.status || 500);
+  }
+});
+
+router.delete('/api/github/repos', async (ctx) => {
+  if (!guard(ctx)) return;
+  try {
+    ctx.json({ ok: true, ...(await githubWebhookManager.remove(ctx.body?.repo)) });
+  } catch (err) {
+    ctx.error(err.message, err.status || 500);
+  }
 });
 
 /**
@@ -546,6 +575,7 @@ router.post('/webhook/github', async (ctx) => {
   }
   try {
     const env = hub.webhooks.github(ctx.headers, ctx.body);
+    if (!env) return ctx.json({ ok: true, ignored: true, event: 'ping' });
     const res = await hub.ingestAsync(env, 'github-webhook');
     ctx.json({ ok: true, ...res });
   } catch (err) {
@@ -672,7 +702,7 @@ const server = http.createServer(async (req, res) => {
 
   // 中间件：读 body
   try {
-    if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       ctx.rawBody = await readBody(req);
       ctx.body = parseBody(ctx.rawBody, req.headers['content-type']);
     }

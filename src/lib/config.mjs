@@ -59,7 +59,7 @@ export const DEFAULTS = {
     encryptKey: '',
     chatId: '',
   },
-  github: { webhookSecret: '', allowedRepos: [] },
+  github: { webhookSecret: '', allowedRepos: [], webhookUrl: '', webhookIds: {} },
   // 监控 webhook 的共享密钥。默认空 = 不校验（本地 127.0.0.1 够用）；
   // 一旦把 hub.host 改成局域网地址，这里必须填，否则同网段任何人都能伪造告警。
   monitor: { sharedSecret: '' },

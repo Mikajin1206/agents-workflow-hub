@@ -61,6 +61,8 @@
   },
   "github": {
     "webhookSecret": "",
+    "webhookUrl": "",
+    "webhookIds": {},
     "allowedRepos": [],
     "$allowedRepos_comment": "接真实仓库时把 owner/name 填进来，否则 GitHub webhook 会被 403 拒掉。示例：[\"your-name/your-repo\"]"
   },
