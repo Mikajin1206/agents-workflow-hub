@@ -47,7 +47,8 @@ const claudeEngine = {
     return whichSync(['claude.cmd', 'claude', 'claude.exe']) !== null;
   },
   buildArgs({ prompt, workdir, model, mode }) {
-    const args = ['-p', prompt, '--output-format', 'json'];
+    const args = ['-p', '--output-format', 'json'];
+    if (prompt !== undefined) args.splice(1, 0, prompt);
     if (model) args.push('--model', model);
     if (mode === 'review' || mode === 'readonly') {
       // 审查/只读：plan 模式，只能看不能动——这是刻意的，审查不应改代码。
@@ -113,7 +114,7 @@ const codexEngine = {
       args.push('--sandbox', sb);
     }
     if (outputFile) args.push('-o', outputFile);
-    args.push(prompt);
+    args.push(prompt ?? '-');
     return args;
   },
   bin: () => whichSync(['codex.cmd', 'codex', 'codex.exe']),
@@ -252,10 +253,11 @@ export async function runWithEngine({ engineId, prompt, task, workdir, model, mo
   // （调试、脚本、单测）都会在仓库根目录留下一堆 engine-*.log 垃圾文件。
   const scratchDir = logDir || path.join(os.tmpdir(), 'agents-workflow-engine-logs');
   const outputFile = path.join(scratchDir, `last-message-${task?.task_id || Date.now()}.txt`);
-  const args = engine.buildArgs({ prompt: finalPrompt, workdir, model, mode, outputFile });
+  const args = engine.buildArgs({ workdir, model, mode, outputFile });
   const logPath = path.join(scratchDir, `engine-${task?.task_id || Date.now()}.log`);
   const res = await runProcess(bin, args, {
     cwd: workdir,
+    input: finalPrompt,
     timeoutMs: task?.meta?.limits?.timeout_seconds ? task.meta.limits.timeout_seconds * 1000 : 900_000,
     logPath,
     onLog: log?.debug,
@@ -415,7 +417,7 @@ function quoteWin(s) {
   return /[\s"&|<>^()]/.test(str) ? `"${str}"` : str;
 }
 
-export function runProcess(bin, args, { cwd, timeoutMs = 900_000, logPath, onLog, env } = {}) {
+export function runProcess(bin, args, { cwd, timeoutMs = 900_000, logPath, onLog, env, input } = {}) {
   return new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
@@ -475,11 +477,15 @@ export function runProcess(bin, args, { cwd, timeoutMs = 900_000, logPath, onLog
       windowsHide: true,
       windowsVerbatimArguments: viaCmd,
       shell: false,
-      // stdin 必须显式 ignore：默认 'pipe' 会留一个永不关闭的管道，
-      // codex 之类的 CLI 检测到非 TTY 就会打印 "Reading additional input from stdin..."
-      // 并一直等 EOF —— 表现为任务永远卡住直到超时（实测 45s 才被 SIGKILL）。
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
+    if (child.stdin) {
+      // 子进程提前退出时，写入管道可能失败。退出状态和 stderr 仍由进程事件处理。
+      child.stdin.on('error', (err) => {
+        if (err.code !== 'EPIPE') stderr += `\nstdin: ${err.message}`;
+      });
+      child.stdin.end(input, 'utf8');
+    }
     const timer = setTimeout(() => {
       timedOut = true;
       try { child.kill('SIGKILL'); } catch { /* ignore */ }

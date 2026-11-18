@@ -5,6 +5,7 @@
  *   node src/cli.mjs status
  *   node src/cli.mjs submit --type cmd.manual --target acme/shop --summary "查一下 CI"
  *   node src/cli.mjs submit --engine codex --summary "跑一遍仓库巡检" --sync
+ *   node src/cli.mjs pipeline --repo owner/name --pr 123
  *   node src/cli.mjs events --limit 20
  *   node src/cli.mjs tasks --status queued
  *   node src/cli.mjs approvals
@@ -24,8 +25,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { loadConfig, ensureDirs } from './lib/config.mjs';
 import { Hub } from './hub.mjs';
+import { STEPS } from './m4/pipeline.mjs';
 
 /** 探测中台是否在线（1 秒超时，避免 CLI 卡住） */
 async function probeHub(config) {
@@ -136,6 +139,7 @@ async function main() {
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') { console.log(HELP); return 0; }
 
   const config = loadConfig();
+  if (cmd === 'pipeline') return await cmdPipeline(args, config);
   ensureDirs(config);
   const hub = new Hub({ config, logLevel: 'warn' });
 
@@ -274,6 +278,89 @@ async function cmdSubmit(hub, args, config) {
   }
   console.log('');
   return 0;
+}
+
+async function cmdPipeline(args, config) {
+  const repo = String(args.repo || '');
+  const pr = Number(args.pr);
+  const existingId = args._[1];
+  if (!existingId && (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !Number.isSafeInteger(pr) || pr < 1)) {
+    console.error('用法：node src/cli.mjs pipeline --repo owner/name --pr 123，或 pipeline <流水线编号>');
+    return 2;
+  }
+  if (args.local && !existingId) {
+    if (config.pipeline?.mode !== 'real' || !config.pipeline.releaseCommand || !config.pipeline.verifyCommand) {
+      throw new Error('本机发布需要真实模式，并配置发布和核实命令');
+    }
+    const git = (...argv) => execFileSync('git', argv, { cwd: config.paths.root, encoding: 'utf8' }).trim();
+    if (git('status', '--porcelain')) throw new Error('本机发布要求工作区干净');
+    const info = JSON.parse(execFileSync('gh', ['pr', 'view', String(pr), '--repo', repo,
+      '--json', 'state,headRefOid'], { encoding: 'utf8' }));
+    if (info.state !== 'OPEN' || git('rev-parse', 'HEAD') !== info.headRefOid) {
+      throw new Error('本机发布要求当前检出版本与开放 PR 的提交一致');
+    }
+    execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+      'scripts/service/release-hub.ps1', '-Check'], { cwd: config.paths.root, stdio: 'inherit' });
+    const hub = new Hub({ config: { ...config, feishu: { ...config.feishu, enabled: false } } });
+    const engine = String(args.engine || 'codex');
+    const prUrl = `https://github.com/${repo}/pull/${pr}`;
+    try {
+      const pipelineId = hub.pipeline.create({ repo, prNumber: pr, prUrl, engine });
+      console.log(pipelineId);
+      const result = await hub.pipeline.run({
+        pipelineId, repo, prNumber: pr, prUrl, engine,
+        options: { expectedHeadSha: info.headRefOid, requireReview: true, localController: true },
+      });
+      console.log(JSON.stringify(result, null, 2));
+      return result.ok && result.steps.length === STEPS.length && result.steps.every((step) => step.ok && !step.skipped) ? 0 : 1;
+    } finally {
+      hub.stop();
+      hub.ledger.close();
+    }
+  }
+  const live = await probeHub(config);
+  if (!live) throw new Error('中台未在线');
+  const headers = { 'x-hub-token': config.hub.secret };
+  async function get(pathname) {
+    const res = await fetch(live.url + pathname, { headers, signal: AbortSignal.timeout(5000) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+  let id = existingId;
+  if (!id) {
+    const status = await get('/api/pipeline?limit=1');
+    if (status.dry || !status.release_configured || !status.verify_configured) {
+      throw new Error('真实五步验收需要真实模式，并配置发布和核实命令');
+    }
+    const result = await postToHub(live.url, config, '/api/pipeline', {
+      repo, pr_number: pr, engine: String(args.engine || 'codex'),
+    });
+    if (!result?.ok) throw new Error(result?.error || '流水线启动结果未知，请查看面板');
+    id = result.pipeline_id;
+  }
+  console.log(id);
+  const deadline = Date.now() + 60 * 60_000;
+  let previous = '';
+  while (Date.now() < deadline) {
+    const { steps, active } = await get(`/api/pipeline/${encodeURIComponent(id)}`);
+    const latest = new Map(steps.map((row) => [row.step, row]));
+    const summary = STEPS.map((step) => `${step}=${latest.get(step)?.status || 'pending'}`).join(' ');
+    if (summary !== previous) console.log(summary);
+    previous = summary;
+    const failed = STEPS.find((step) => latest.get(step)?.status === 'failed');
+    if (failed && (active === false || failed !== 'review' || latest.get(failed).attempt >= 3)) {
+      const detail = JSON.parse(latest.get(failed).detail || '{}');
+      if (detail.error) console.error(detail.error);
+      return 1;
+    }
+    if (['passed', 'skipped'].includes(latest.get('verify')?.status)) {
+      return STEPS.every((step) => latest.get(step)?.status === 'passed') ? 0 : 1;
+    }
+    if (active === false) throw new Error('流水线已停止，五步尚未完成');
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error(`等待超时。可用 pipeline ${id} 继续查看`);
 }
 
 /** 带访问令牌的 JSON POST */

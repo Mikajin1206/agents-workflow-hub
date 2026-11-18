@@ -2,6 +2,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { loadConfig, nowIso } from './lib/config.mjs';
 import { Router, createCtx, readBody, parseBody, verifyHmacSha256, serveStatic } from './lib/http.mjs';
 import { Hub } from './hub.mjs';
@@ -25,6 +26,14 @@ const hub = new Hub({ config: cfg });
 const router = new Router();
 const githubWebhookManager = new GitHubWebhookManager({ config: cfg });
 const startedAt = nowIso();
+const gitOptions = { cwd: cfg.paths.root, encoding: 'utf8', timeout: 3000, windowsHide: true };
+const revision = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], gitOptions);
+const trackedChanges = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], gitOptions);
+const startupVersion = {
+  commit: revision.status === 0 ? revision.stdout.trim() : null,
+  clean: trackedChanges.status === 0 && trackedChanges.stdout.trim() === '',
+  started_at: startedAt,
+};
 
 /* ────────────────────────── 鉴权（轻量） ────────────────────────── */
 
@@ -58,6 +67,11 @@ router.get('/static/*', (ctx) => {
 });
 
 /* ────────────────────────── 健康与总览 ────────────────────────── */
+
+router.get('/api/version', (ctx) => {
+  if (!guard(ctx)) return;
+  ctx.json(startupVersion);
+});
 
 router.get('/api/health', (ctx) => {
   ctx.json({
@@ -105,13 +119,13 @@ router.get('/api/pipeline/:id', (ctx) => {
   if (!guard(ctx)) return;
   const rows = hub.ledger.all('SELECT * FROM pipeline_runs WHERE pipeline_id=? ORDER BY seq', ctx.params.id);
   if (!rows.length) return ctx.error('流水线不存在', 404);
-  ctx.json({ ok: true, pipeline_id: ctx.params.id, steps: rows });
+  ctx.json({ ok: true, pipeline_id: ctx.params.id, active: hub.pipeline.active.has(ctx.params.id), steps: rows });
 });
 
 /**
  * 手动触发一次流水线。
  * autoStart=false 时这是唯一入口；面板上的「进流水线」按钮走这里。
- * 真实模式在合并前检查发布和核实命令是否已配置。
+ * 发布和核实命令由各自的步骤检查。
  */
 router.post('/api/pipeline', async (ctx) => {
   if (!guard(ctx)) return;

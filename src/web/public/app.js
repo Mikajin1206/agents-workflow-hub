@@ -576,8 +576,9 @@ function renderPipeline() {
         : '五步会真的合并 PR、执行发布命令。'}
       ${meta.auto_start ? ' · 代码任务开出 PR 后会自动进入流水线。' : ' · 自动启动已关闭，只能从这里手动触发。'}
       ${meta.reviewer_engine ? ` · 审查引擎指定为 ${esc(meta.reviewer_engine)}。` : ''}
-      ${!meta.release_configured || !meta.verify_configured
-        ? ' · <b>发布/核实命令未配置</b>，真跑时④⑤会如实报错。' : ''}
+      ${!isDry && !meta.release_configured ? ' · <b>发布命令未配置</b>，合并成功后会停在发布步骤。' : ''}
+      ${!isDry && meta.release_configured && !meta.verify_configured
+        ? ' · <b>核实命令未配置</b>，发布成功后会停在核实步骤。' : ''}
     </div>`;
   }
   if (!runs.length) {

@@ -50,6 +50,11 @@ export class Pipeline {
 
   /** 跑五步。任何一步失败就停，按失败位置决定通知级别。 */
   async run({ pipelineId, repo, prNumber, prUrl, taskId, engine = 'claude-code', options = {} }) {
+    if (!this.runner.dry && this.config.pipeline?.localController && !options.localController) {
+      const error = '本机服务发布需要独立 CLI：pipeline --local';
+      this.#record(pipelineId, 'review', 0, 'failed', { error });
+      return { ok: false, pipeline_id: pipelineId, failed_step: 'review', steps: [] };
+    }
     const state = { pipelineId, repo, prNumber, prUrl, taskId, engine, options: { ...options, workdir: HUB_ROOT } };
     const steps = [];
     this.active.set(pipelineId, state);
@@ -119,6 +124,11 @@ export class Pipeline {
     let reviewEngine = null;
     if (step === 'review') {
       reviewEngine = this.#reviewerEngine(state.engine);
+      if (!reviewEngine && options.requireReview) {
+        const error = '本机发布必须完成交叉审查，当前没有可用的第二个引擎';
+        this.#record(pipelineId, step, index, 'failed', { error });
+        return { ok: false, error };
+      }
       if (!reviewEngine) {
         this.#record(pipelineId, step, index, 'skipped', {
           reason: '没有可用的第二个引擎，无法交叉审查',
@@ -147,6 +157,8 @@ export class Pipeline {
           repo: state.repo,
           prNumber: state.prNumber,
           prUrl: state.prUrl,
+          mergedSha: state.mergedSha,
+          expectedHeadSha: options.expectedHeadSha,
           headRef: state.headRef,
           baseRef: state.baseRef,
           attempt,
@@ -341,7 +353,7 @@ export function createRunner({ config, log, engines, mode = 'auto' }) {
   const dry = mode === 'mock' || (mode !== 'real' && !gitReady);
   return {
     dry,
-    async runStep({ step, repo, prNumber, prUrl, headRef, baseRef, attempt, engine, workdir }) {
+    async runStep({ step, repo, prNumber, prUrl, mergedSha, expectedHeadSha, attempt, engine, workdir }) {
       if (dry) return mockStep({ step, attempt, repo, prNumber, engine });
 
       switch (step) {
@@ -350,14 +362,11 @@ export function createRunner({ config, log, engines, mode = 'auto' }) {
         case 'check':
           return checkStep({ workdir, log });
         case 'merge':
-          if (!config.pipeline?.releaseCommand || !config.pipeline?.verifyCommand) {
-            return { ok: false, error: '合并前必须配置发布和核实命令', detail: {} };
-          }
-          return mergeStep({ prNumber, repo, workdir, log });
+          return mergeStep({ prNumber, repo, workdir, log, expectedHeadSha });
         case 'release':
-          return releaseStep({ config, workdir, log });
+          return releaseStep({ config, workdir, log, mergedSha });
         case 'verify':
-          return verifyStep({ config, workdir, log });
+          return verifyStep({ config, workdir, log, mergedSha });
         default:
           return { ok: false, error: `未知步骤 ${step}`, detail: {} };
       }
@@ -457,11 +466,14 @@ async function checkStep({ workdir, log }) {
   return { ok: true, detail: { ran } };
 }
 
-async function mergeStep({ prNumber, repo, workdir, log }) {
+async function mergeStep({ prNumber, repo, workdir, log, expectedHeadSha }) {
   const { runProcess, whichSync } = await import('../m3/engines.mjs');
   const gh = whichSync(['gh.exe', 'gh']);
   if (!gh) return { ok: false, error: '未找到 gh CLI', detail: {} };
-  const res = await runProcess(gh, ['pr', 'merge', String(prNumber), '--repo', repo, '--squash', '--delete-branch'], {
+  const args = ['pr', 'merge', String(prNumber), '--repo', repo, '--squash'];
+  if (expectedHeadSha) args.push('--match-head-commit', expectedHeadSha);
+  else args.push('--delete-branch');
+  const res = await runProcess(gh, args, {
     cwd: workdir, timeoutMs: 180_000,
   });
   log?.info?.('合并 PR', { repo, pr: prNumber, code: res.code });
@@ -469,27 +481,35 @@ async function mergeStep({ prNumber, repo, workdir, log }) {
   const sha = await runProcess(gh, ['pr', 'view', String(prNumber), '--repo', repo, '--json', 'mergeCommit', '-q', '.mergeCommit.oid'], {
     cwd: workdir, timeoutMs: 60_000,
   });
-  return { ok: true, detail: { commit_sha: sha.stdout.trim() || null } };
+  const commitSha = sha.stdout.trim();
+  if (sha.code !== 0 || !/^[a-f0-9]{40}$/i.test(commitSha)) {
+    return { ok: false, error: '未能确认 GitHub 上的合并提交，发布已停止', detail: {} };
+  }
+  return { ok: true, detail: { commit_sha: commitSha } };
 }
 
-async function releaseStep({ config, workdir, log }) {
+async function releaseStep({ config, workdir, log, mergedSha }) {
   const cmd = config.pipeline?.releaseCommand;
   if (!cmd) return { ok: false, error: '未配置 pipeline.releaseCommand（发布命令）', detail: {} };
   const { runProcess } = await import('../m3/engines.mjs');
-  const res = await runProcess(process.env.ComSpec || 'cmd.exe', ['/c', cmd], { cwd: workdir, timeoutMs: 30 * 60_000 });
+  const res = await runProcess(process.env.ComSpec || 'cmd.exe', ['/c', cmd], {
+    cwd: workdir, timeoutMs: 30 * 60_000, env: { HUB_MERGED_SHA: mergedSha || '' },
+  });
   log?.info?.('发布', { code: res.code });
   if (res.code !== 0) return { ok: false, error: `发布失败：${(res.stdout + res.stderr).slice(-1500)}`, detail: {} };
   return { ok: true, detail: { command: cmd } };
 }
 
-async function verifyStep({ config, workdir, log }) {
+async function verifyStep({ config, workdir, log, mergedSha }) {
   const cmd = config.pipeline?.verifyCommand;
   if (!cmd) return { ok: false, error: '未配置 pipeline.verifyCommand（核实命令，需返回线上实际版本号）', detail: {} };
   const { runProcess } = await import('../m3/engines.mjs');
-  const res = await runProcess(process.env.ComShell || process.env.ComSpec || 'cmd.exe', ['/c', cmd], { cwd: workdir, timeoutMs: 300_000 });
+  const res = await runProcess(process.env.ComShell || process.env.ComSpec || 'cmd.exe', ['/c', cmd], {
+    cwd: workdir, timeoutMs: 300_000, env: { HUB_MERGED_SHA: mergedSha || '' },
+  });
   log?.info?.('核实线上版本', { code: res.code });
   if (res.code !== 0) return { ok: false, error: `核实命令失败：${res.stderr.slice(0, 800)}`, detail: {} };
-  const expected = config.pipeline?.expectedVersion;
+  const expected = config.pipeline?.expectedVersion || mergedSha;
   if (expected && !res.stdout.includes(String(expected))) {
     return { ok: false, error: `线上版本不含预期标记 ${expected}，实际输出：${res.stdout.slice(0, 500)}`, detail: {} };
   }
